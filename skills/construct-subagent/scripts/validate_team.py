@@ -3,8 +3,10 @@
 
 The validator is read-only. It checks the project manifest, Codex custom-agent
 TOML files, project agent settings, model assignments, skill paths, managed
-file ownership, and the observed Codex runtime version. It requires Python 3.11
-or newer, exits with 0 on success, and exits with 1 on validation failures.
+file ownership, instruction coverage, symbolic-link safety, permission evidence,
+and the observed Codex runtime version. It distinguishes configuration readiness
+from host-verified runtime readiness. It requires Python 3.11 or newer, exits
+with 0 on success, and exits with 1 on requested validation failures.
 """
 
 from __future__ import annotations
@@ -15,9 +17,10 @@ import json
 import re
 import sys
 import tomllib
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 MANAGED_HEADER = "# Managed by construct-subagent. Edit via $construct-subagent."
@@ -38,6 +41,7 @@ VALID_MODEL_CATALOG_SOURCES = {
 }
 VALID_MODEL_PROBE_SOURCES = {"successful_model_probe"}
 VALID_PERMISSION_EVIDENCE_SOURCES = {"host_runtime", "spawn_session_metadata"}
+VALID_APPROVAL_POLICIES = {"granular", "never", "on-request", "untrusted"}
 VALID_CODEX_VERSION_SOURCES = {"codex_cli", "host_runtime"}
 MINIMUM_CODEX_VERSION = (0, 145, 0)
 MAXIMUM_REVIEWED_CODEX_SERIES = (0, 147)
@@ -52,6 +56,10 @@ CODEX_VERSION_PATTERN = re.compile(
     r"(?P<patch>0|[1-9]\d*)"
     r"(?:-(?P<prerelease>[0-9A-Za-z.-]+))?"
     r"(?:\+(?P<build>[0-9A-Za-z.-]+))?$",
+    re.IGNORECASE,
+)
+INSTRUCTION_SECTION_PATTERN = re.compile(
+    r"^\s*(Responsibilities|Boundaries|Inputs|Outputs|Escalation)\s*:\s*(.*)$",
     re.IGNORECASE,
 )
 CAPABILITY_RANK = {"throughput": 0, "balanced": 1, "strong": 2}
@@ -75,6 +83,22 @@ REQUIRED_COST_METRICS = {
     "success_rate",
     "total_cost",
 }
+
+
+@dataclass(frozen=True)
+class HostPermissionEvidence:
+    """Permission observations supplied directly by a trusted host adapter.
+
+    The command-line interface intentionally cannot construct this evidence.
+    CLI flags remain caller assertions even when their source label names a
+    host runtime or spawn metadata.
+    """
+
+    source: str
+    agent_sandboxes: Mapping[str, str]
+    agent_approval_policies: Mapping[str, str]
+    parent_sandbox: str | None = None
+    parent_approval_policy: str | None = None
 
 
 def parse_codex_version(raw_version: str) -> dict[str, Any] | None:
@@ -116,6 +140,7 @@ class TeamValidator:
         agent_runtime_sandboxes: dict[str, str] | None = None,
         agent_runtime_approval_policies: dict[str, str] | None = None,
         permission_evidence_source: str | None = None,
+        host_permission_evidence: HostPermissionEvidence | None = None,
         require_runtime_permissions: bool = False,
         codex_version: str | None = None,
         codex_version_source: str | None = None,
@@ -135,6 +160,7 @@ class TeamValidator:
         self.agent_runtime_sandboxes = agent_runtime_sandboxes
         self.agent_runtime_approval_policies = agent_runtime_approval_policies
         self.permission_evidence_source = permission_evidence_source
+        self.host_permission_evidence = host_permission_evidence
         self.require_runtime_permissions = require_runtime_permissions
         self.codex_version = codex_version
         self.codex_version_source = codex_version_source
@@ -161,6 +187,10 @@ class TeamValidator:
     def load_toml(self, path: Path, label: str) -> dict[str, Any] | None:
         """Load a TOML file and report parse or type errors."""
         self.checked_files.add(path)
+        symlink = self.find_symlink_component(path)
+        if symlink is not None:
+            self.error(f"{label} must not use a symbolic link: {symlink}")
+            return None
         try:
             with path.open("rb") as handle:
                 data = tomllib.load(handle)
@@ -174,6 +204,20 @@ class TeamValidator:
             self.error(f"{label} must contain a TOML table: {path}")
             return None
         return data
+
+    def find_symlink_component(self, path: Path) -> Path | None:
+        """Return the first symlink from the project root to ``path``."""
+        absolute = path if path.is_absolute() else self.root / path
+        try:
+            relative = absolute.relative_to(self.root)
+        except ValueError:
+            return None
+        current = self.root
+        for part in relative.parts:
+            current /= part
+            if current.is_symlink():
+                return current
+        return None
 
     def require_string(self, table: dict[str, Any], key: str, context: str) -> str | None:
         """Return a required non-empty string or record an error."""
@@ -243,18 +287,26 @@ class TeamValidator:
             self.error(f"{context}.{key} must include a UTC offset")
 
     def resolve_project_path(self, raw_path: str, context: str) -> Path | None:
-        """Resolve a project-relative path and prevent traversal outside root."""
+        """Resolve a project-relative path without following symbolic links."""
         candidate = Path(raw_path)
         if candidate.is_absolute():
             self.error(f"{context} must be project-relative, got: {raw_path}")
             return None
-        resolved = (self.root / candidate).resolve()
+        if ".." in candidate.parts:
+            self.error(f"{context} must not traverse parent directories: {raw_path}")
+            return None
+        unresolved = self.root / candidate
+        symlink = self.find_symlink_component(unresolved)
+        if symlink is not None:
+            self.error(f"{context} must not use a symbolic link: {symlink}")
+            return None
+        resolved = unresolved.resolve()
         try:
             resolved.relative_to(self.root)
         except ValueError:
             self.error(f"{context} escapes the project root: {raw_path}")
             return None
-        return resolved
+        return unresolved
 
     def validate_project(self, manifest: dict[str, Any]) -> None:
         """Validate the Project Execution Profile."""
@@ -485,16 +537,43 @@ class TeamValidator:
 
     def validate_runtime_permissions(self) -> dict[str, Any]:
         """Validate each Agent's observed effective permissions independently."""
-        parent_sandbox = self.runtime_sandbox
-        parent_approval_policy = self.runtime_approval_policy
-        sandboxes = self.agent_runtime_sandboxes or {}
-        approval_policies = self.agent_runtime_approval_policies or {}
-        evidence_source = self.permission_evidence_source
+        host_evidence = self.host_permission_evidence
+        caller_evidence_supplied = any(
+            value is not None
+            for value in (
+                self.runtime_sandbox,
+                self.runtime_approval_policy,
+                self.agent_runtime_sandboxes,
+                self.agent_runtime_approval_policies,
+                self.permission_evidence_source,
+            )
+        )
+        if host_evidence is not None:
+            parent_sandbox = host_evidence.parent_sandbox
+            parent_approval_policy = host_evidence.parent_approval_policy
+            sandboxes = dict(host_evidence.agent_sandboxes)
+            approval_policies = dict(host_evidence.agent_approval_policies)
+            evidence_source = host_evidence.source
+            evidence_trust = "host_verified"
+            status = "HOST_VERIFIED"
+            if caller_evidence_supplied:
+                status = "MISMATCH"
+                self.runtime_permission_error(
+                    "trusted host permission evidence must not be combined with "
+                    "caller-supplied runtime permission flags"
+                )
+        else:
+            parent_sandbox = self.runtime_sandbox
+            parent_approval_policy = self.runtime_approval_policy
+            sandboxes = self.agent_runtime_sandboxes or {}
+            approval_policies = self.agent_runtime_approval_policies or {}
+            evidence_source = self.permission_evidence_source
+            evidence_trust = "caller_asserted" if caller_evidence_supplied else "none"
+            status = "CALLER_ASSERTED" if caller_evidence_supplied else "UNVERIFIED"
         configured_names = {
             configured["name"] for configured in self.configured_agent_permissions
         }
         evidence_names = set(sandboxes) | set(approval_policies)
-        status = "VERIFIED"
 
         if evidence_source is None:
             status = "UNVERIFIED"
@@ -508,6 +587,22 @@ class TeamValidator:
             self.runtime_permission_error(
                 f"permission evidence source must be one of "
                 f"{sorted(VALID_PERMISSION_EVIDENCE_SOURCES)}, got: {evidence_source}"
+            )
+
+        if parent_sandbox is not None and parent_sandbox not in VALID_SANDBOXES:
+            status = "MISMATCH"
+            self.runtime_permission_error(
+                f"observed parent sandbox must be one of {sorted(VALID_SANDBOXES)}, "
+                f"got: {parent_sandbox}"
+            )
+        if (
+            parent_approval_policy is not None
+            and parent_approval_policy not in VALID_APPROVAL_POLICIES
+        ):
+            status = "MISMATCH"
+            self.runtime_permission_error(
+                "observed parent approval policy must be one of "
+                f"{sorted(VALID_APPROVAL_POLICIES)}, got: {parent_approval_policy}"
             )
 
         unexpected_names = sorted(evidence_names - configured_names)
@@ -545,6 +640,13 @@ class TeamValidator:
                     f"Agent {name} observed sandbox must be one of "
                     f"{sorted(VALID_SANDBOXES)}, got: {observed_sandbox}"
                 )
+            elif observed_approval_policy not in VALID_APPROVAL_POLICIES:
+                comparison_status = "MISMATCH"
+                status = "MISMATCH"
+                self.runtime_permission_error(
+                    f"Agent {name} observed approval policy must be one of "
+                    f"{sorted(VALID_APPROVAL_POLICIES)}, got: {observed_approval_policy}"
+                )
             elif observed_sandbox != configured_sandbox:
                 comparison_status = "MISMATCH"
                 status = "MISMATCH"
@@ -566,10 +668,18 @@ class TeamValidator:
                 }
             )
 
+        if status == "CALLER_ASSERTED" and self.require_runtime_permissions:
+            self.runtime_permission_error(
+                "caller-asserted runtime permission evidence cannot satisfy strict "
+                "AGENT_TEAM_READY verification; a trusted host adapter must provide "
+                "HostPermissionEvidence"
+            )
+
         return {
             "status": status,
             "required": self.require_runtime_permissions,
             "evidence_source": evidence_source,
+            "evidence_trust": evidence_trust,
             "observed_parent": {
                 "sandbox_mode": parent_sandbox,
                 "approval_policy": parent_approval_policy,
@@ -647,6 +757,72 @@ class TeamValidator:
         if not skill_file.is_file():
             self.error(f"{context} does not resolve to a Skill: {raw_path}")
 
+    @staticmethod
+    def normalize_instruction_text(value: str) -> str:
+        """Normalize instruction prose for stable required-content matching."""
+        return re.sub(r"[\W_]+", " ", value.casefold()).strip()
+
+    def parse_instruction_sections(self, instructions: str) -> dict[str, str]:
+        """Parse the five required free-form instruction sections."""
+        sections: dict[str, list[str]] = {}
+        current: str | None = None
+        for line in instructions.splitlines():
+            match = INSTRUCTION_SECTION_PATTERN.match(line)
+            if match is not None:
+                current = match.group(1).casefold()
+                sections.setdefault(current, [])
+                inline = match.group(2).strip()
+                if inline:
+                    sections[current].append(inline)
+                continue
+            if current is not None and line.strip():
+                sections[current].append(line.strip())
+        return {name: "\n".join(lines) for name, lines in sections.items()}
+
+    def validate_developer_instructions(
+        self,
+        instructions: str,
+        agent: dict[str, Any],
+        context: str,
+    ) -> None:
+        """Require critical Manifest facts while allowing additional prose."""
+        sections = self.parse_instruction_sections(instructions)
+
+        def manifest_items(key: str) -> list[str]:
+            value = agent.get(key)
+            if not isinstance(value, list):
+                return []
+            return [item for item in value if isinstance(item, str)]
+
+        expected: dict[str, list[str]] = {
+            "responsibilities": manifest_items("responsibilities"),
+            "boundaries": [
+                *manifest_items("boundaries"),
+                *manifest_items("permission_boundaries"),
+            ],
+            "inputs": manifest_items("inputs"),
+            "outputs": manifest_items("outputs"),
+            "escalation": manifest_items("escalation_triggers"),
+        }
+        for section, required_items in expected.items():
+            content = sections.get(section)
+            if not content:
+                self.error(
+                    f"{context}.file developer_instructions must contain a non-empty "
+                    f"{section.title()}: section"
+                )
+                continue
+            normalized_content = self.normalize_instruction_text(content)
+            for item in required_items:
+                if not isinstance(item, str):
+                    continue
+                normalized_item = self.normalize_instruction_text(item)
+                if normalized_item and normalized_item not in normalized_content:
+                    self.error(
+                        f"{context}.file developer_instructions {section.title()}: "
+                        f"section does not cover Manifest item: {item}"
+                    )
+
     def validate_agent_file(
         self,
         agent: dict[str, Any],
@@ -676,6 +852,8 @@ class TeamValidator:
         instructions = config.get("developer_instructions")
         if not isinstance(instructions, str) or not instructions.strip():
             self.error(f"{context}.file developer_instructions must be non-empty")
+        else:
+            self.validate_developer_instructions(instructions, agent, context)
         configured_skills: list[str] = []
         skill_table = config.get("skills")
         if isinstance(skill_table, dict):
@@ -799,7 +977,7 @@ class TeamValidator:
                 path = self.resolve_project_path(raw_file, f"{context}.file")
                 if path is not None:
                     expected_parent = (self.root / ".codex" / "agents").resolve()
-                    if path.parent != expected_parent or path.suffix != ".toml":
+                    if path.parent.resolve() != expected_parent or path.suffix != ".toml":
                         self.error(f"{context}.file must be an active .codex/agents/*.toml file")
                     else:
                         if path in active_paths:
@@ -828,6 +1006,10 @@ class TeamValidator:
         agents_dir = self.root / ".codex" / "agents"
         if agents_dir.is_dir():
             for path in agents_dir.glob("*.toml"):
+                symlink = self.find_symlink_component(path)
+                if symlink is not None:
+                    self.error(f"active Agent path must not use a symbolic link: {symlink}")
+                    continue
                 try:
                     first_line = path.read_text(encoding="utf-8").splitlines()[0]
                 except (OSError, IndexError):
@@ -945,9 +1127,23 @@ class TeamValidator:
             *self.runtime_permission_errors,
             *self.codex_compatibility_errors,
         ]
+        configuration_ready = not self.errors
+        fully_ready = (
+            configuration_ready
+            and not self.availability_errors
+            and runtime_permissions["status"] == "HOST_VERIFIED"
+            and runtime_codex_compatibility["status"] == "VERIFIED"
+        )
+        if fully_ready:
+            readiness_status = "AGENT_TEAM_READY"
+        elif configuration_ready:
+            readiness_status = "AGENT_TEAM_CONFIGURATION_READY"
+        else:
+            readiness_status = "BLOCKED_BY_CONFIGURATION"
         return {
             "status": "PASS" if not all_errors else "FAIL",
             "configuration_status": "PASS" if not self.errors else "FAIL",
+            "readiness_status": readiness_status,
             "runtime_model_availability": availability,
             "runtime_permissions": runtime_permissions,
             "runtime_codex_compatibility": runtime_codex_compatibility,
@@ -961,6 +1157,8 @@ class TeamValidator:
         """Hash checked managed inputs to support external idempotency comparisons."""
         digest = hashlib.sha256()
         for path in sorted(self.checked_files):
+            if self.find_symlink_component(path) is not None:
+                continue
             if not path.is_file():
                 continue
             try:
@@ -1033,12 +1231,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--runtime-approval-policy",
-        help="Approval policy observed on the parent session, reported as context only",
+        choices=sorted(VALID_APPROVAL_POLICIES),
+        help="Caller-reported parent approval policy, retained as context only",
     )
     parser.add_argument(
         "--permission-evidence-source",
         choices=sorted(VALID_PERMISSION_EVIDENCE_SOURCES),
-        help="Trusted source for per-Agent effective permission evidence",
+        help="Caller-reported source label for per-Agent permission evidence",
     )
     parser.add_argument(
         "--agent-runtime-sandbox",
@@ -1046,7 +1245,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=parse_named_runtime_value,
         dest="agent_runtime_sandboxes",
         metavar="AGENT=MODE",
-        help="Observed effective sandbox for one Agent; repeat once per Agent",
+        help="Caller-reported effective sandbox for one Agent; repeat once per Agent",
     )
     parser.add_argument(
         "--agent-runtime-approval-policy",
@@ -1054,12 +1253,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=parse_named_runtime_value,
         dest="agent_runtime_approval_policies",
         metavar="AGENT=POLICY",
-        help="Observed effective approval policy for one Agent; repeat once per Agent",
+        help="Caller-reported approval policy for one Agent; repeat once per Agent",
     )
     parser.add_argument(
         "--require-runtime-permissions",
         action="store_true",
-        help="Fail unless every Agent has matching effective permission evidence",
+        help=(
+            "Require HOST_VERIFIED evidence; CLI permission assertions intentionally "
+            "cannot satisfy this strict mode"
+        ),
     )
     parser.add_argument(
         "--codex-version",
@@ -1111,7 +1313,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         print(
-            f"{report['status']}: construct-subagent team at {report['root']} "
+            f"{report['readiness_status']}: construct-subagent team at {report['root']} "
             f"({report['checked_files']} files, fingerprint {report['fingerprint']})"
         )
         print(

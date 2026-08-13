@@ -18,7 +18,7 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 - 只在模型、权限、上下文隔离、可独立并行、独立验证或专业能力至少一项不同的时候拆分角色。
 - 合并职责、边界、模型和权限相同的角色；优先选择最小充分集合。
 - 采用扁平拓扑。Subagent 向主 Agent 返回结果，不直接决定或派发下一步。
-- 对权限分三层表述：`sandbox_mode` 是 Agent 的配置默认值；父线程当前 sandbox/approval 是 spawn 时可能重新应用的实时权限；“只运行测试”“不得改需求”等是仅靠 `developer_instructions` 实施的行为边界。不要把任一层声称为另一层的保证。
+- 对权限分三层表述：`sandbox_mode` 是 Agent 的配置默认值；父线程当前 sandbox/approval 是 spawn 时可能重新应用的实时权限；“只运行测试”“不得改需求”等是仅靠 `developer_instructions` 实施的行为边界。CLI 参数只能形成 `CALLER_ASSERTED` 证据；只有宿主 API 直接证据才能形成 `HOST_VERIFIED`。不要把任一层声称为另一层的保证。
 - 保留用户维护的配置和不相关改动。只更新本 Skill 明确拥有的文件或受控标记块。
 - 使用有受控来源的模型注册表，并把配置可用、目录声明和真实调用探测分开报告。不要永久硬编码某一组模型或把调用者参数描述成已验证的账户权限。
 - 让相同输入产生相同文件。不要因为再次运行而刷新时间戳、动作标签或重排内容。
@@ -122,6 +122,8 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 - 调用时机、允许并行的组和禁止并行的冲突；
 - 向主 Agent 返回 `BLOCKED` / `FAILED` 的升级策略。
 
+生成 `developer_instructions` 时保留自由说明，但必须使用 `Responsibilities:`、`Boundaries:`、`Inputs:`、`Outputs:` 和 `Escalation:` 五个非空段，并逐项包含 Manifest 对应事实。`Boundaries:` 同时覆盖 `boundaries` 与 `permission_boundaries`。
+
 ### 7. 分配模型、权限和 Skill
 
 按“能力 × 任务价值 × 失败成本 × 调用频率 × Token 消耗 × 并行数量”选择模型，并以总费用、Token、调用次数、延迟和成功率共同衡量结果：
@@ -130,7 +132,7 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 - 将中高能力执行模型用于主要编码、复杂重构和独立模块实现；
 - 将高吞吐低成本模型用于探索、测试、批量检查、日志归纳和简单修改；
 - 仅使用 registry 明确支持的 reasoning effort；
-- 配置默认值使用最小权限：默认为 `read-only`；只有必须修改工作区的角色才使用 `workspace-write`；除非用户明确要求且风险已解释，否则禁止 `danger-full-access`。允许团队混合使用不同 sandbox；从可信宿主或 spawn metadata 逐 Agent 记录实际有效 sandbox 和 approval policy，不能因父线程或 Agent 文件中的单一值推断所有 spawned Agent 权限；
+- 配置默认值使用最小权限：默认为 `read-only`；只有必须修改工作区的角色才使用 `workspace-write`；除非用户明确要求且风险已解释，否则禁止 `danger-full-access`。允许团队混合使用不同 sandbox；逐 Agent 记录实际有效 sandbox 和 approval policy，不能因父线程或 Agent 文件中的单一值推断所有 spawned Agent 权限。若证据只是通过 CLI 转述，即使标注来源为宿主或 spawn metadata，也只能报告 `CALLER_ASSERTED`；
 - 只绑定已存在且与职责匹配的 Skill。缺失 Skill 时记录 gap 或使用基础工作规则，不要自动创建新 Skill。
 
 固定 Agent 文件中的 `model` 会优先于 spawn override。为兼顾“便宜的默认模型”和“必要时升级”：
@@ -144,6 +146,8 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 ### 8. 对账并写入
 
 先形成期望状态，再逐文件比较；内容相同则不要重写。
+
+写入前对 `.codex`、`.codex/agents`、Manifest、项目配置、活动 Agent 和 Artifact 路径执行不跟随链接的检查。任一路径或从项目根开始的父目录是符号链接时，停止并返回 `BLOCKED_BY_UNSAFE_PATH`；不要读取链接目标后继续写入。
 
 - `CREATE`：创建缺失的受管定义。
 - `UPDATE`：仅更新团队事实已变化的受管定义。
@@ -169,20 +173,20 @@ Manifest 使用稳定的 `last_changed_at`。仅在语义内容变化时更新�
 ### 9. 验证
 
 1. 本 Skill 的验证器因使用标准库 `tomllib`，要求 Python 3.11 或更高版本。先按目标 `AGENTS.md` 验证 pyenv/venv 路径和 `python3 --version`，再运行验证器。若目标项目 venv 低于 3.11，可在项目规则允许时使用独立的、pyenv 管理的 Python 3.11+ 验证专用 venv；验证器是只读的，不导入目标应用依赖。
-2. 运行 `scripts/validate_team.py --root <project-root> --availability-source <source> --available-model <model-id> ... --permission-evidence-source <source> --agent-runtime-sandbox <agent>=<mode> --agent-runtime-approval-policy <agent>=<policy> --require-runtime-permissions --codex-version <observed-version> --codex-version-source <source>`。每个目录模型重复一次 `--available-model`；每个 Agent 重复一组实际 sandbox 与 approval policy；父线程权限可用 `--runtime-sandbox` 和 `--runtime-approval-policy` 作为上下文传入。若完成真实模型调用，再用 `--model-probe-source successful_model_probe` 和重复的 `--probed-model` 传入。所有运行时证据必须来自当前可信宿主、模型选择器、成功调用或 spawn metadata，不能从 Agent 文件或 Manifest 反推。
-3. 若无法取得 Python 3.11+ 环境，按验证脚本的同等规则人工检查并明确标注未运行脚本；不要伪造通过，也不要声明 `AGENT_TEAM_READY`。
-4. 确认报告的 `configuration_status = PASS`、`runtime_model_availability.status != FAIL`、`runtime_permissions.status = VERIFIED` 且 `runtime_codex_compatibility.status = VERIFIED`。`UNVERIFIED` 表示只有配置证据，`CALLER_ASSERTED` 表示目录声明完整，`VERIFIED` 才表示全部模型真实探测成功；前两者允许配置就绪但不能声称真实调用已验证。再确认所有活动受管 Agent 可解析、名称唯一、必填字段齐全、模型存在于 registry、Skill 路径存在、配置默认 sandbox 与 Manifest 一致且逐 Agent 匹配实际有效 sandbox。
+2. 运行 `scripts/validate_team.py --root <project-root> --availability-source <source> --available-model <model-id> ... --permission-evidence-source <source> --agent-runtime-sandbox <agent>=<mode> --agent-runtime-approval-policy <agent>=<policy> --codex-version <observed-version> --codex-version-source <source>`。每个目录模型重复一次 `--available-model`；每个 Agent 重复一组实际 sandbox 与 approval policy；父线程权限可用 `--runtime-sandbox` 和 `--runtime-approval-policy` 作为上下文传入。若完成真实模型调用，再用 `--model-probe-source successful_model_probe` 和重复的 `--probed-model` 传入。CLI 参数是调用者转述，只能达到 `CALLER_ASSERTED`，不能冒充宿主验证。
+3. 若无法取得 Python 3.11+ 环境，按验证脚本的同等规则人工检查并明确标注未运行脚本；不要伪造通过。配置自洽时最多声明 `AGENT_TEAM_CONFIGURATION_READY`。
+4. 确认报告的 `configuration_status = PASS`、`readiness_status = AGENT_TEAM_CONFIGURATION_READY` 或更高、`runtime_model_availability.status != FAIL` 且 `runtime_codex_compatibility.status = VERIFIED`。模型的 `UNVERIFIED` 表示只有配置证据，`CALLER_ASSERTED` 表示目录声明完整，`VERIFIED` 才表示全部模型真实探测成功。权限的 `CALLER_ASSERTED` 只支持配置就绪；只有宿主集成直接向验证器提供 `HostPermissionEvidence` 并得到 `HOST_VERIFIED`，才允许 `AGENT_TEAM_READY`。再确认所有活动受管 Agent 可解析、无符号链接、名称唯一、必填字段齐全、instructions 覆盖 Manifest 关键事实、模型存在于 registry、Skill 路径存在、配置默认 sandbox 与 Manifest 一致且逐 Agent 匹配实际有效 sandbox。
 5. 确认 `last_changed_at` 是带时区的 RFC 3339 时间戳，模型和 Agent 分别按 `id` 与 `name` 排序，集合型数组排序且无重复，`serializes_with` 引用存在、非自身且关系对称，每个 Agent 文件只被引用一次，Artifact 路径指向普通文件，升级配置按契约定义严格强于默认配置，Cost Profile 包含完整多指标。
 6. 确认 `.codex/config.toml` 可解析、没有显式禁用 agents，且并发上限为正数。
 7. 确认并行规则覆盖同文件、公共 API、数据库 schema、前置依赖和高风险共享状态。
 8. 用同一项目事实再次计算期望状态；若没有语义变化，应得到全 KEEP 且零文件 diff。
-9. 主动提供的模型目录/探测证据若缺少必需模型，返回 `BLOCKED_BY_MODEL_REGISTRY`；缺少真实探测只降低证据等级，不阻止配置使用。任一 Agent 权限证据缺失或实际 sandbox 与其配置默认值不一致时返回 `BLOCKED_BY_RUNTIME_PERMISSIONS`；Codex 版本状态不是 `VERIFIED` 时返回 `BLOCKED_BY_CODEX_COMPATIBILITY`；只有全部强制完成条件成立时返回 `AGENT_TEAM_READY`。
+9. 主动提供的模型目录/探测证据若缺少必需模型，返回 `BLOCKED_BY_MODEL_REGISTRY`；缺少真实探测只降低证据等级，不阻止配置使用。符号链接路径返回 `BLOCKED_BY_UNSAFE_PATH`。配置通过但权限只有调用者声明时返回 `AGENT_TEAM_CONFIGURATION_READY`；任一 Agent 权限证据缺失、值非法或实际 sandbox 与其配置默认值不一致时返回 `BLOCKED_BY_RUNTIME_PERMISSIONS`；Codex 版本状态不是 `VERIFIED` 时返回 `BLOCKED_BY_CODEX_COMPATIBILITY`；只有权限为 `HOST_VERIFIED` 且全部强制完成条件成立时返回 `AGENT_TEAM_READY`。
 
 ## 完成输出
 
 返回简洁、可核验的摘要：
 
-1. 状态：`AGENT_TEAM_READY` 或明确的 BLOCKED 状态；
+1. 状态：`AGENT_TEAM_CONFIGURATION_READY`、`AGENT_TEAM_READY` 或明确的 BLOCKED 状态；
 2. Project Execution Profile 摘要；
 3. Agent 表：角色、CREATE/UPDATE/KEEP/RETIRE、默认模型、升级模型、sandbox、职责；
 4. 中央协调、失败升级和并行/串行规则；

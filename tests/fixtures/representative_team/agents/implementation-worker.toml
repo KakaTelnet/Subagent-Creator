@@ -5,9 +5,16 @@ model = "economy-model"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """
-Responsibilities: implement bounded changes and targeted tests.
-Boundaries: do not change product requirements.
-Inputs: read the evidence map and Task Contract.
-Outputs: return a focused diff and verification evidence.
-Escalation: return BLOCKED when a public contract change is required.
+Responsibilities:
+- Implement bounded changes and targeted tests.
+Boundaries:
+- Do not change product requirements.
+- Write only within the project workspace.
+Inputs:
+- Evidence map
+- Task Contract
+Outputs:
+- Focused diff and verification evidence
+Escalation:
+- Public contract change required
 """

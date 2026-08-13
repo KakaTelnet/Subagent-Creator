@@ -13,6 +13,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = PROJECT_ROOT / "scripts" / "validate_plugin.py"
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+
+from check_official_plugin_schema import extract_documented_fields  # noqa: E402
 
 
 class PluginValidatorTests(unittest.TestCase):
@@ -31,7 +34,7 @@ class PluginValidatorTests(unittest.TestCase):
         result = self.run_validator(PROJECT_ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_current_official_schema_compatibility_fields_pass(self) -> None:
+    def test_reviewed_extended_schema_compatibility_fields_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             (temporary_root / ".codex-plugin").mkdir()
@@ -79,6 +82,29 @@ class PluginValidatorTests(unittest.TestCase):
 
             result = self.run_validator(temporary_root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_official_schema_field_extraction_detects_future_fields(self) -> None:
+        markdown = """\
+### Manifest fields
+
+- `name`, `version`, and `futureTopLevel` identify the plugin.
+- `interface` controls presentation.
+
+Use the `interface` object for install-surface metadata:
+
+- `displayName` and `futureInterfaceField` control copy.
+
+### Path rules
+"""
+        top_level, interface = extract_documented_fields(markdown)
+        self.assertEqual(
+            top_level,
+            {"futureTopLevel", "interface", "name", "version"},
+        )
+        self.assertEqual(
+            interface,
+            {"displayName", "futureInterfaceField"},
+        )
 
     def test_default_prompt_rejects_more_than_three_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
