@@ -1,0 +1,29 @@
+{
+  "name": "construct-subagent",
+  "version": "0.1.0",
+  "description": "Design and configure minimal, project-specific Codex subagent teams with cost-aware model routing.",
+  "license": "AGPL-3.0-only",
+  "author": {
+    "name": "construct-subagent contributors"
+  },
+  "keywords": [
+    "codex",
+    "subagents",
+    "multi-agent",
+    "model-routing"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "构建子 Agent 分身",
+    "shortDescription": "为项目配置精简、多模型的 Codex 子 Agent 团队",
+    "longDescription": "分析项目执行特征，配置最小充分的 Codex 子 Agent 团队，并用低成本模型承担边界清楚的低风险任务。",
+    "developerName": "construct-subagent contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use $construct-subagent to design a minimal Codex subagent team for this project."
+    ]
+  }
+}

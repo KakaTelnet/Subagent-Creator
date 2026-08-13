@@ -1,0 +1,7 @@
+[project]
+name = "construct-subagent"
+version = "0.1.0"
+description = "Codex Skill-only Plugin for constructing minimal project Subagent teams."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-only"
