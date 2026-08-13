@@ -185,6 +185,8 @@ class TeamValidatorTests(unittest.TestCase):
             runtime_sandbox="read-only",
             runtime_approval_policy="on-request",
             require_runtime_permissions=True,
+            codex_version="codex-cli 0.147.0-alpha.6.5",
+            codex_version_source="codex_cli",
         ).validate()
 
     def test_valid_team_passes_and_fingerprint_is_stable(self) -> None:
@@ -194,6 +196,15 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(first["configuration_status"], "PASS")
         self.assertEqual(first["runtime_model_availability"]["status"], "VERIFIED")
         self.assertEqual(first["runtime_permissions"]["status"], "VERIFIED")
+        self.assertEqual(first["runtime_codex_compatibility"]["status"], "VERIFIED")
+        self.assertEqual(
+            first["runtime_codex_compatibility"]["normalized_version"],
+            "0.147.0-alpha.6.5",
+        )
+        self.assertEqual(
+            first["runtime_codex_compatibility"]["release_channel"],
+            "prerelease",
+        )
         self.assertEqual(
             first["runtime_permissions"]["agents"][0]["configured_sandbox_default"],
             "read-only",
@@ -388,6 +399,10 @@ class TeamValidatorTests(unittest.TestCase):
                 "--runtime-approval-policy",
                 "on-request",
                 "--require-runtime-permissions",
+                "--codex-version",
+                "codex-cli 0.147.0-alpha.6.5",
+                "--codex-version-source",
+                "codex_cli",
                 "--json",
             ],
             check=False,
@@ -399,6 +414,87 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(report["configuration_status"], "PASS")
         self.assertEqual(report["runtime_model_availability"]["status"], "VERIFIED")
         self.assertEqual(report["runtime_permissions"]["status"], "VERIFIED")
+        self.assertEqual(report["runtime_codex_compatibility"]["status"], "VERIFIED")
+
+    def test_missing_codex_version_evidence_is_unverified(self) -> None:
+        report = TeamValidator(
+            self.root,
+            available_models={"economy-model", "strong-model"},
+            availability_source="runtime_model_registry",
+            runtime_sandbox="read-only",
+            runtime_approval_policy="on-request",
+            require_runtime_permissions=True,
+        ).validate()
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["configuration_status"], "PASS")
+        self.assertEqual(report["runtime_codex_compatibility"]["status"], "UNVERIFIED")
+        self.assertTrue(
+            any("version evidence was not supplied" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_minimum_stable_codex_version_passes(self) -> None:
+        report = TeamValidator(
+            self.root,
+            available_models={"economy-model", "strong-model"},
+            availability_source="runtime_model_registry",
+            runtime_sandbox="read-only",
+            runtime_approval_policy="on-request",
+            require_runtime_permissions=True,
+            codex_version="codex-cli 0.145.0",
+            codex_version_source="codex_cli",
+        ).validate()
+        self.assertEqual(report["status"], "PASS", report["errors"])
+        self.assertEqual(report["runtime_codex_compatibility"]["status"], "VERIFIED")
+
+    def test_prerelease_of_minimum_codex_version_is_unsupported_old(self) -> None:
+        report = TeamValidator(
+            self.root,
+            codex_version="codex-cli 0.145.0-alpha.1",
+            codex_version_source="codex_cli",
+        ).validate()
+        self.assertEqual(
+            report["runtime_codex_compatibility"]["status"],
+            "UNSUPPORTED_OLD",
+        )
+
+    def test_codex_below_minimum_version_is_unsupported_old(self) -> None:
+        report = TeamValidator(
+            self.root,
+            codex_version="codex-cli 0.144.6",
+            codex_version_source="codex_cli",
+        ).validate()
+        self.assertEqual(
+            report["runtime_codex_compatibility"]["status"],
+            "UNSUPPORTED_OLD",
+        )
+
+    def test_newer_unreviewed_codex_series_is_blocked(self) -> None:
+        report = TeamValidator(
+            self.root,
+            codex_version="codex-cli 0.148.0",
+            codex_version_source="codex_cli",
+        ).validate()
+        self.assertEqual(
+            report["runtime_codex_compatibility"]["status"],
+            "UNREVIEWED_NEWER",
+        )
+        self.assertTrue(
+            any("maximum reviewed series" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_malformed_codex_version_is_unverified(self) -> None:
+        report = TeamValidator(
+            self.root,
+            codex_version="Codex from sometime recently",
+            codex_version_source="host_runtime",
+        ).validate()
+        self.assertEqual(report["runtime_codex_compatibility"]["status"], "UNVERIFIED")
+        self.assertTrue(
+            any("not parseable" in error for error in report["errors"]),
+            report["errors"],
+        )
 
     def test_required_runtime_permissions_without_evidence_are_unverified(self) -> None:
         report = TeamValidator(

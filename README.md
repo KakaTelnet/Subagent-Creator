@@ -12,6 +12,7 @@ Codex Subagent 可以并行承担代码检索、实现、测试、调试和审�
 - 套用固定角色模板，项目越简单，额外协调成本反而越高；
 - 所有任务都使用高成本模型，重复检索和批量检查消耗过多资源；
 - 把公开模型列表误当成当前账户真实可用的模型，配置生成后无法运行；
+- 在过旧或尚未审查的新 Codex 版本中沿用旧 Agent schema，导致配置与运行时冲突；
 - 混淆 Agent 的默认 sandbox、父线程实时权限和提示词行为约束，导致安全边界被夸大；
 - 再次生成配置时覆盖用户维护的 Agent，或仅因时间变化制造无意义 diff；
 - 配置文件能够解析，就直接宣布团队可用，却没有验证模型、权限和文件所有权。
@@ -20,6 +21,7 @@ Codex Subagent 可以并行承担代码检索、实现、测试、调试和审�
 
 ```text
 项目事实
+  -> Codex 版本与官方 schema 兼容性 Gate
   -> 需求就绪 Gate
   -> 当前可用模型 Registry
   -> Project Execution Profile
@@ -63,6 +65,7 @@ Skill 只管理带有明确所有权标记的 Agent 文件，并使用 `CREATE`�
 - 产品结果、主要范围、非目标和关键约束已经明确；
 - 项目中有可供读取的 Product Spec、Change Spec、Technical Spec、Architecture 或等价事实来源；
 - 当前 Codex 运行时能够提供真实的可用模型信息；
+- 当前 Codex 运行时能够提供可解析的版本证据，并位于本 Skill 已审查的 `0.145.0` 至 `0.147.x` 兼容窗口；
 - 允许 Skill 在目标项目中维护 `.codex/` 配置；
 - 目标项目能提供由 pyenv 管理、Python 3.11 或更高版本的虚拟环境，用于运行只读验证器。
 
@@ -103,12 +106,13 @@ Codex 会从 `$HOME/.agents/skills` 发现用户级 Skill。如果安装后没�
 Skill 随后会：
 
 1. 读取适用的 `AGENTS.md`、Git 状态、产品/技术/验证文档和现有 Agent 配置；
-2. 检查需求是否足以决定团队形态；
-3. 从当前运行时建立可验证的模型 Registry；
-4. 生成 Project Execution Profile，并推导最小充分角色；
-5. 定义每个角色的职责、边界、默认模型、升级条件、权限、输入输出和并行规则；
-6. 对账并最小化修改项目配置；
-7. 运行验证器，并再次对账以确认幂等性。
+2. 检查当前 Codex 版本与最新官方 Agent schema 是否处于已审查兼容范围；
+3. 检查需求是否足以决定团队形态；
+4. 从当前运行时建立可验证的模型 Registry；
+5. 生成 Project Execution Profile，并推导最小充分角色；
+6. 定义每个角色的职责、边界、默认模型、升级条件、权限、输入输出和并行规则；
+7. 对账并最小化修改项目配置；
+8. 运行验证器，并再次对账以确认幂等性。
 
 ## 生成结果
 
@@ -128,7 +132,7 @@ Skill 随后会：
 - 每个角色的 `CREATE` / `UPDATE` / `KEEP` / `RETIRE` 动作；
 - 默认模型、升级模型、sandbox、职责和调用时机；
 - 中央协调、失败升级、并行和串行规则；
-- 模型可用性、运行时权限和配置一致性的独立验证结果；
+- 模型可用性、Codex 版本兼容性、运行时权限和配置一致性的独立验证结果；
 - 实际写入的文件及运行过的验证命令。
 
 ## 何时不应该使用
@@ -145,9 +149,9 @@ Skill 随后会：
 
 ## 验证器
 
-Skill 包含只读验证器 `skills/construct-subagent/scripts/validate_team.py`。它会联合检查团队 Manifest、Agent TOML、Skill 路径、模型分配、升级强度、文件所有权、项目并发配置和父线程实时权限。
+Skill 包含只读验证器 `skills/construct-subagent/scripts/validate_team.py`。它会联合检查团队 Manifest、Agent TOML、Skill 路径、模型分配、升级强度、文件所有权、项目并发配置、父线程实时权限和当前 Codex 版本兼容性。
 
-验证器要求 Python 3.11+。模型列表、sandbox 和 approval policy 必须来自当前运行时，不能从已经生成的 Manifest 反向复制。缺少这些外部证据时，即使配置本身可以解析，也不能得到就绪状态。
+验证器要求 Python 3.11+。模型列表、sandbox、approval policy 和 Codex 版本必须来自当前运行时，不能从已经生成的 Manifest 反向复制。缺少这些外部证据，或 Codex 版本低于 `0.145.0`、高于已审查的 `0.147.x` 时，即使配置本身可以解析，也不能得到就绪状态。
 
 ## 开发与贡献
 

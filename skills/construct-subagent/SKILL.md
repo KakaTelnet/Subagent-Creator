@@ -29,12 +29,13 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 
 ## 工作流
 
-### 1. 解析项目根与官方能力
+### 1. 解析项目根、官方能力与 Codex 兼容性
 
 1. 将显式目标目录作为项目根；否则使用当前工作目录或 Git 根。
 2. 读取适用的 `AGENTS.md`、项目 Git 状态和写入限制。不要覆盖不相关的 dirty/untracked 文件。
 3. 使用 `openai-docs` 查询当前官方 **Subagents** 与 **Configuration Reference**，确认自定义 Agent 路径、必填字段、模型优先级、权限继承和 Skill 配置仍然有效。
-4. 若当前官方 schema 与本 Skill 契约冲突，以官方 schema 为准；先更新输出设计，再写文件，并在结果中说明兼容性变化。
+4. 执行 `codex --version`，或读取宿主明确公开的等价运行时版本；保留原始值和来源，按契约判定是否位于已审查兼容窗口。
+5. 若版本缺失、无法解析、低于最低稳定版本、高于最高已审查系列，或当前官方 schema 与本 Skill 契约冲突，不创建或修改目标团队文件；返回 `BLOCKED_BY_CODEX_COMPATIBILITY`。先更新本 Skill 的契约、验证器和测试，不要在生成目标配置时临时绕过兼容性 Gate。
 
 当前基线只作为待验证假设：项目 Agent 位于 `.codex/agents/*.toml`，每个文件至少包含 `name`、`description`、`developer_instructions`；项目级全局设置位于 `.codex/config.toml` 的 `[agents]`。
 
@@ -66,6 +67,7 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 - 项目级、用户级和已安装 Skill 的真实路径；
 - 并发上限、允许/禁止模型、成本/质量/速度优先级、网络和写入约束；
 - 当前父线程实际生效的 sandbox 与 approval policy；
+- 当前 Codex 运行时版本及其独立来源；
 - 现有 Agent 的所有权：受本 Skill 管理、用户管理或来源不明。
 
 不要采用同名但非本 Skill 管理的 Agent。若受管角色需要使用其名称，返回 `BLOCKED_BY_AGENT_CONFLICT` 并给出冲突路径。
@@ -166,14 +168,14 @@ Manifest 使用稳定的 `last_changed_at`。仅在语义内容变化时更新�
 ### 9. 验证
 
 1. 本 Skill 的验证器因使用标准库 `tomllib`，要求 Python 3.11 或更高版本。先按目标 `AGENTS.md` 验证 pyenv/venv 路径和 `python3 --version`，再运行验证器。若目标项目 venv 低于 3.11，可在项目规则允许时使用独立的、pyenv 管理的 Python 3.11+ 验证专用 venv；验证器是只读的，不导入目标应用依赖。
-2. 运行 `scripts/validate_team.py --root <project-root> --availability-source <source> --available-model <model-id> ... --runtime-sandbox <mode> --runtime-approval-policy <policy> --require-runtime-permissions`，并传入本次运行实际观察到的模型和父线程权限证据。每个已观察到的模型重复一次 `--available-model`；sandbox 和 approval 必须读取当前父线程实际值，不能从 Agent 文件或 Manifest 反推。
+2. 运行 `scripts/validate_team.py --root <project-root> --availability-source <source> --available-model <model-id> ... --runtime-sandbox <mode> --runtime-approval-policy <policy> --require-runtime-permissions --codex-version <observed-version> --codex-version-source <source>`，并传入本次运行实际观察到的模型、父线程权限和 Codex 版本证据。每个已观察到的模型重复一次 `--available-model`；sandbox、approval 和版本必须来自当前运行时，不能从 Agent 文件或 Manifest 反推。
 3. 若无法取得 Python 3.11+ 环境，按验证脚本的同等规则人工检查并明确标注未运行脚本；不要伪造通过，也不要声明 `AGENT_TEAM_READY`。
-4. 确认报告的 `configuration_status = PASS`、`runtime_model_availability.status = VERIFIED` 且 `runtime_permissions.status = VERIFIED`；再确认所有活动受管 Agent 可解析、名称唯一、必填字段齐全、模型存在于 registry、Skill 路径存在、配置默认 sandbox 与 Manifest 一致且与父线程实时 sandbox 匹配。
+4. 确认报告的 `configuration_status = PASS`、`runtime_model_availability.status = VERIFIED`、`runtime_permissions.status = VERIFIED` 且 `runtime_codex_compatibility.status = VERIFIED`；再确认所有活动受管 Agent 可解析、名称唯一、必填字段齐全、模型存在于 registry、Skill 路径存在、配置默认 sandbox 与 Manifest 一致且与父线程实时 sandbox 匹配。
 5. 确认 `last_changed_at` 是带时区的 RFC 3339 时间戳，模型和 Agent 分别按 `id` 与 `name` 排序，每个 Agent 文件只被引用一次，Artifact 路径指向普通文件，升级配置按契约定义严格强于默认配置。
 6. 确认 `.codex/config.toml` 可解析、没有显式禁用 agents，且并发上限为正数。
 7. 确认并行规则覆盖同文件、公共 API、数据库 schema、前置依赖和高风险共享状态。
 8. 用同一项目事实再次计算期望状态；若没有语义变化，应得到全 KEEP 且零文件 diff。
-9. 缺少独立模型证据或模型不在当前外部集合中时返回 `BLOCKED_BY_MODEL_REGISTRY`；父线程权限证据缺失或实时 sandbox 与配置默认值不一致时返回 `BLOCKED_BY_RUNTIME_PERMISSIONS`；只有全部完成条件成立时返回 `AGENT_TEAM_READY`。
+9. 缺少独立模型证据或模型不在当前外部集合中时返回 `BLOCKED_BY_MODEL_REGISTRY`；父线程权限证据缺失或实时 sandbox 与配置默认值不一致时返回 `BLOCKED_BY_RUNTIME_PERMISSIONS`；Codex 版本状态不是 `VERIFIED` 时返回 `BLOCKED_BY_CODEX_COMPATIBILITY`；只有全部完成条件成立时返回 `AGENT_TEAM_READY`。
 
 ## 完成输出
 
@@ -183,7 +185,7 @@ Manifest 使用稳定的 `last_changed_at`。仅在语义内容变化时更新�
 2. Project Execution Profile 摘要；
 3. Agent 表：角色、CREATE/UPDATE/KEEP/RETIRE、默认模型、升级模型、sandbox、职责；
 4. 中央协调、失败升级和并行/串行规则；
-5. Cost Profile、模型可用性证据来源，以及配置状态与运行时可用性状态的明确区分；
+5. Cost Profile、模型可用性证据来源、Codex 版本与兼容性状态，以及配置状态与运行时可用性状态的明确区分；
 6. Skill gaps，并明确区分 Agent 配置默认 sandbox、父线程实时 sandbox/approval 和只能靠 `developer_instructions` 实施的行为边界；
 7. 写入的精确文件路径；
 8. 实际运行的验证命令和结果；

@@ -73,6 +73,21 @@ class RepositoryLayoutTests(unittest.TestCase):
         metadata = (SKILL_ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")
         self.assertIn("$construct-subagent", metadata)
 
+    def test_runtime_codex_compatibility_gate_is_distributed(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        contract = (SKILL_ROOT / "references" / "agent-team-contract.md").read_text(
+            encoding="utf-8"
+        )
+        validator = (SKILL_ROOT / "scripts" / "validate_team.py").read_text(
+            encoding="utf-8"
+        )
+        for content in (skill, contract):
+            self.assertIn("BLOCKED_BY_CODEX_COMPATIBILITY", content)
+            self.assertIn("runtime_codex_compatibility", content)
+        self.assertIn("MINIMUM_CODEX_VERSION = (0, 145, 0)", validator)
+        self.assertIn("MAXIMUM_REVIEWED_CODEX_SERIES = (0, 147)", validator)
+        self.assertIn('"--codex-version"', validator)
+
     def test_ci_runs_skill_and_plugin_validators(self) -> None:
         workflow = (PROJECT_ROOT / ".github" / "workflows" / "validate.yml").read_text(
             encoding="utf-8"

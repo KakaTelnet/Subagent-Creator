@@ -177,6 +177,30 @@ Agent 的默认与升级模型必须都在 registry 中，且 reasoning effort �
 - `comparison_status`：每个 Agent 的 `MATCH`、`MISMATCH` 或 `UNVERIFIED`；
 - `behavioral_boundary_enforcement`：固定为 `developer_instructions_only`，明确行为边界不等于技术权限。
 
+### 3.5 Runtime Codex Compatibility Evidence
+
+Codex 自定义 Agent 是原生运行时配置，格式可能随 Codex 演进。目标团队文件只能在本 Skill 已审查的兼容窗口内生成或宣布就绪：
+
+- 最低稳定兼容版本：`0.145.0`。该版本是官方 changelog 中 multi-agent v2 标记稳定并把设置统一到 `[agents]` 的首个稳定版本；
+- 最高已审查系列：`0.147.x`。patch、build metadata，以及最低稳定版本之后且仍位于已审查系列内的宿主预发布后缀不单独触发阻塞；
+- `0.145.0` 自身的预发布版本仍早于最低稳定基线；
+- 高于 `0.147.x` 的版本不推断向后兼容。先根据最新官方 Subagents 与 Configuration Reference 更新本契约、验证器和回归测试，再扩大窗口；
+- 不设置“静默兼容”或用户文字绕过。未审查新系列必须返回 `BLOCKED_BY_CODEX_COMPATIBILITY`。
+
+运行时版本是会话事实，不写入 `.codex/agent-team.toml`，不参与 `last_changed_at` 或文件 fingerprint。验证时必须独立观察并传入：
+
+- `--codex-version`：`codex --version` 的原始输出，或宿主明确公开的等价当前版本；
+- `--codex-version-source`：`codex_cli` 或 `host_runtime`。
+
+验证器报告以下状态：
+
+- `VERIFIED`：版本可解析，且处于最低稳定版本与最高已审查系列之间；
+- `UNVERIFIED`：缺少版本、来源缺失/非法或版本无法解析；
+- `UNSUPPORTED_OLD`：版本低于最低稳定兼容版本；
+- `UNREVIEWED_NEWER`：版本高于最高已审查系列。
+
+只有 `runtime_codex_compatibility.status = VERIFIED` 才能宣布 `AGENT_TEAM_READY`。版本检查不能替代每次运行时的官方 schema 查询；二者任一冲突都必须在写目标项目文件前阻止。
+
 ## 4. `.codex/config.toml`
 
 项目配置至少保证：
@@ -238,6 +262,7 @@ max_concurrent_threads_per_session = 3
 - 最小充分角色和不可合并理由已经审查；
 - 所有 Agent 的职责、边界、模型、权限、Skill、输入、输出和升级完整；
 - 默认和升级模型均有当前可用性证据；
+- 当前 Codex 版本有独立来源，且运行时兼容性状态为 `VERIFIED`；
 - 父线程实时 sandbox 和 approval policy 已独立观察，且 sandbox 与所有 Agent 配置默认值一致；
 - 中央协调、失败流和串并行规则完整；
 - 活动受管 Agent 无重复、无孤儿、无名称冲突；
@@ -256,7 +281,9 @@ python3 scripts/validate_team.py \
   --available-model <verified-escalation-model> \
   --runtime-sandbox <observed-parent-sandbox> \
   --runtime-approval-policy <observed-parent-approval-policy> \
-  --require-runtime-permissions
+  --require-runtime-permissions \
+  --codex-version <observed-codex-version> \
+  --codex-version-source codex_cli
 ```
 
 验证报告同时包含：
@@ -264,6 +291,7 @@ python3 scripts/validate_team.py \
 - `configuration_status`：Manifest、Agent、项目配置和文件所有权是否自洽；
 - `runtime_model_availability.status`：`VERIFIED`、`UNVERIFIED` 或 `FAIL`；
 - `runtime_permissions.status`：`VERIFIED`、`UNVERIFIED` 或 `MISMATCH`；
-- 顶层 `status`：只有配置通过、运行时模型状态为 `VERIFIED`，并且严格模式下运行时权限状态为 `VERIFIED` 时才为 `PASS`。
+- `runtime_codex_compatibility.status`：`VERIFIED`、`UNVERIFIED`、`UNSUPPORTED_OLD` 或 `UNREVIEWED_NEWER`；
+- 顶层 `status`：只有配置通过、运行时模型状态、严格模式下运行时权限状态和 Codex 兼容性状态均为 `VERIFIED` 时才为 `PASS`。
 
-`configuration_status = PASS` 不能单独支持 `AGENT_TEAM_READY`。缺少外部模型集合时，即使其他配置完全自洽，顶层状态仍必须为 `FAIL`，并报告运行时模型可用性为 `UNVERIFIED`。完成 Gate 必须使用 `--require-runtime-permissions`；缺少父线程权限证据时报告 `UNVERIFIED`，配置默认 sandbox 与父线程实时 sandbox 不一致时报告 `MISMATCH`，两者都不得宣布团队就绪。
+`configuration_status = PASS` 不能单独支持 `AGENT_TEAM_READY`。缺少外部模型集合时，即使其他配置完全自洽，顶层状态仍必须为 `FAIL`，并报告运行时模型可用性为 `UNVERIFIED`。完成 Gate 必须使用 `--require-runtime-permissions`；缺少父线程权限证据时报告 `UNVERIFIED`，配置默认 sandbox 与父线程实时 sandbox 不一致时报告 `MISMATCH`，两者都不得宣布团队就绪。Codex 版本证据缺失、过旧或高于已审查系列时同样保持顶层 `FAIL`，且不得先写目标团队文件再补做兼容性判断。
