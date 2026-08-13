@@ -1,6 +1,6 @@
 # Subagent Creator
 
-- 本 Skill 用于创建可由主 Agent 调度的 Codex Subagent；默认只在当前项目生效，用户明确声明时也可创建个人级、所有项目可用的 Agent。
+- 本 Skill 用于创建可由主 Agent 调度的 Codex Subagent；默认只在当前项目生效，用户明确声明时也可创建全局 Agent，供所有项目使用。
 - 子 Agent 按照职责、风险和调用频率选择当前可用模型：
   - 强推理模型用于架构判断、复杂调试和高风险审查；
   - 平衡型执行模型用于主要实现和边界明确的修复；
@@ -57,16 +57,16 @@ Skill 使用两层就绪状态：文件通过本地严格 Codex Schema、模型�
 
 `subagent-creator` 不是一套固定的 planner/coder/tester 模板。它会读取明确的需求、当前上下文和运行时能力，判断需要哪些执行角色，再生成对应作用域的 Codex Agent 配置。简单需求可以只有少量角色；只有当模型、权限、上下文隔离、并行边界或验证职责确实不同，才会拆出新的 Agent。
 
-### 默认项目级，显式选择个人级
+### 默认项目级，显式选择全局
 
 Skill 支持两个作用域：
 
 | 作用域 | 何时使用 | Agent 位置 | 生成器账本 |
 | --- | --- | --- | --- |
 | `project` | 默认；只服务当前仓库 | `<project>/.codex/agents/*.toml` | `<project>/.codex/agent-team.toml` |
-| `personal` | 用户在本次请求中明确说“全局”“个人级”或“所有项目可用” | `<CODEX_HOME>/agents/*.toml`，默认即 `~/.codex/agents/*.toml` | `<CODEX_HOME>/subagent-creator/agent-team.toml` |
+| 全局（内部标识 `personal`） | 用户在本次请求中明确说“全局”或“所有项目可用” | `<CODEX_HOME>/agents/*.toml`，默认即 `~/.codex/agents/*.toml` | `<CODEX_HOME>/subagent-creator/agent-team.toml` |
 
-没有个人级专项声明时，Skill 不会询问或推断，直接生成 project scope。personal scope 写入前会复述实际 Codex Home 和目标路径；它不会修改上下文项目的 `AGENTS.md`，也不会把某个项目的私有路径固化进个人 Agent。
+没有全局专项声明时，Skill 不会询问或推断，直接生成项目级配置。全局写入前会复述实际 Codex Home 和目标路径；它不会修改上下文项目的 `AGENTS.md`，也不会把某个项目的私有路径固化进全局 Agent。
 
 ### 按项目设计团队，而不是套模板
 
@@ -103,7 +103,7 @@ Skill 只管理带有明确所有权标记的 Agent 文件，并使用 `CREATE`�
 - 项目中有可供读取的 Product Spec、Change Spec、Technical Spec、Architecture 或等价事实来源；
 - 项目、用户或当前 Codex 运行时能提供明确的模型 allowlist；真实模型调用探测是可选的增强证据；
 - 若希望取得可选的 `AGENT_TEAM_READY`，当前 Codex 运行时还需提供可解析的版本证据，并位于本 Skill 已审查的 `0.145.0` 至 `0.147.x` 兼容窗口；普通配置生成不要求该证据；
-- 允许 Skill 在目标作用域维护 Codex 配置；个人级写入还必须由用户在本次请求中明确声明；
+- 允许 Skill 在目标作用域维护 Codex 配置；全局写入还必须由用户在本次请求中明确声明；
 - 目标项目能提供由 pyenv 管理、Python 3.11 或更高版本的虚拟环境，用于运行只读验证器。
 
 如果需求歧义会改变团队形态，Skill 会返回 `BLOCKED_BY_REQUIREMENTS`，不会先猜测需求再写配置。
@@ -167,10 +167,10 @@ Skill 随后会：
 上面的请求默认生成项目级 Agent。若确实希望所有项目都可发现，必须专项声明，例如：
 
 ```text
-使用 $subagent-creator 创建个人级全局 Subagent，让它在所有 Codex 项目中可用。请写入我的 Codex Home，不要生成项目级 Agent。
+使用 $subagent-creator 创建全局 Subagent，让它在所有 Codex 项目中可用。请写入我的 Codex Home，不要生成项目级 Agent。
 ```
 
-个人级角色应描述可复用工作，而不是绑定当前仓库。例如“只读审查文档一致性”适合 personal scope；“修改这个项目的支付模块”应保留为 project scope。
+全局角色应描述可复用工作，而不是绑定当前仓库。例如“只读审查文档一致性”适合全局作用域；“修改这个项目的支付模块”应保留为项目级作用域。
 
 ## 生成结果
 
@@ -178,10 +178,10 @@ Skill 随后会：
 
 | 文件 | 作用 |
 | --- | --- |
-| project: `.codex/agent-team.toml`；personal: `<CODEX_HOME>/subagent-creator/agent-team.toml` | 轻量生成器账本，记录作用域、所有权、模型路由、调用时机和编排规则；不复制 Agent prompt |
-| project: `.codex/agents/*.toml`；personal: `<CODEX_HOME>/agents/*.toml` | Codex 原生自定义 Agent 定义 |
+| 项目级：`.codex/agent-team.toml`；全局：`<CODEX_HOME>/subagent-creator/agent-team.toml` | 轻量生成器账本，记录作用域、所有权、模型路由、调用时机和编排规则；不复制 Agent prompt |
+| 项目级：`.codex/agents/*.toml`；全局：`<CODEX_HOME>/agents/*.toml` | Codex 原生自定义 Agent 定义 |
 | 当前作用域 `config.toml` 的 `[agents]` | Agent 启用状态和并发上限；不会重写其他设置 |
-| 项目 `AGENTS.md` 受控标记块 | 仅 project scope 可选使用；personal scope 不修改 |
+| 项目 `AGENTS.md` 受控标记块 | 仅项目级作用域可选使用；全局作用域不修改 |
 | 当前作用域 `agents/retired/*.toml.retired` | 已退役但可恢复的受管 Agent |
 
 完成报告会给出：
@@ -209,11 +209,11 @@ Skill 随后会：
 
 Skill 包含只读验证器 `skills/subagent-creator/scripts/validate_team.py`。它会联合检查轻量 Manifest、Agent TOML 的严格本地 Codex 字段投影、五段原生指令契约、Skill 路径、模型分配、升级强度、相对成本层级、文件所有权、符号链接和项目并发配置。逐 Agent 实际权限、真实模型调用与当前 Codex 版本属于独立的可选增强证据。
 
-验证器要求 Python 3.11+。默认只传 `--root` 时验证 project scope，配置通过即返回 `AGENT_TEAM_CONFIGURATION_READY` 和退出码 0。personal scope 必须同时传入 `--scope personal --codex-home <path> --personal-scope-authorized`；缺少显式授权标志会失败。模型目录参数只会得到 `CALLER_ASSERTED`，覆盖全部必需模型的成功调用才得到 `VERIFIED`；没有探测时，有效配置仍可使用。权限 CLI 参数同样只能得到 `CALLER_ASSERTED`；完整就绪要求宿主直接提供 `HostPermissionEvidence`，并逐一匹配 sandbox 默认值和官方支持的 approval policy。Codex 版本低于 `0.145.0` 或高于已审查的 `0.147.x` 时只会阻止可选完整就绪，不会把已经通过 Schema 的配置重新判为无效。
+验证器要求 Python 3.11+。默认只传 `--root` 时验证项目级配置，配置通过即返回 `AGENT_TEAM_CONFIGURATION_READY` 和退出码 0。全局配置必须同时传入 `--scope personal --codex-home <path> --personal-scope-authorized`；缺少显式授权标志会失败。这里的 `personal` 是 Codex 机器接口采用的全局作用域内部标识，不是第三种作用域。模型目录参数只会得到 `CALLER_ASSERTED`，覆盖全部必需模型的成功调用才得到 `VERIFIED`；没有探测时，有效配置仍可使用。权限 CLI 参数同样只能得到 `CALLER_ASSERTED`；完整就绪要求宿主直接提供 `HostPermissionEvidence`，并逐一匹配 sandbox 默认值和官方支持的 approval policy。Codex 版本低于 `0.145.0` 或高于已审查的 `0.147.x` 时只会阻止可选完整就绪，不会把已经通过 Schema 的配置重新判为无效。
 
 ## 仓库验证
 
-仓库测试使用隔离 fixture 覆盖 Manifest v1/v2 读取兼容与 v3 作用域格式、默认项目级行为、个人级显式授权、混合权限、模型/权限证据分层、本地严格 Codex 字段、指令契约、符号链接、相对成本层级和失败路径，不要求 CI 真实调用模型。CI 会读取当前官方 Codex JSON Schema 与 Subagents 文档，确认本 Skill 生成的字段仍受支持；官方新增字段不会自动放宽本地严格范围。Plugin Schema 兼容检查也继续保留。兼容检查每周自动运行，Python 和 GitHub Actions 依赖由 Dependabot 跟踪。
+仓库测试使用隔离 fixture 覆盖 Manifest v1/v2 读取兼容与 v3 作用域格式、默认项目级行为、全局显式授权、混合权限、模型/权限证据分层、本地严格 Codex 字段、指令契约、符号链接、相对成本层级和失败路径，不要求 CI 真实调用模型。CI 会读取当前官方 Codex JSON Schema 与 Subagents 文档，确认本 Skill 生成的字段仍受支持；官方新增字段不会自动放宽本地严格范围。Plugin Schema 兼容检查也继续保留。兼容检查每周自动运行，Python 和 GitHub Actions 依赖由 Dependabot 跟踪。
 
 ```bash
 source ./venv/bin/activate

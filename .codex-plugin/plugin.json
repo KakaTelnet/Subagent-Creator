@@ -1,7 +1,7 @@
 {
   "name": "subagent-creator",
   "version": "0.1.0",
-  "description": "Design minimal Codex subagent teams with project scope by default and explicitly authorized personal scope.",
+  "description": "Design minimal Codex subagent teams with project scope by default and explicitly authorized global scope.",
   "license": "AGPL-3.0-only",
   "author": {
     "name": "KakaTelnet",
@@ -19,8 +19,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Subagent Creator",
-    "shortDescription": "默认项目级、可选个人级的精简多模型 Agent",
-    "longDescription": "分析执行特征，默认配置当前项目的最小充分 Codex 子 Agent；仅在用户明确声明时创建个人级全局 Agent。",
+    "shortDescription": "默认项目级、可选全局的精简多模型 Agent",
+    "longDescription": "分析执行特征，默认配置当前项目的最小充分 Codex 子 Agent；仅在用户明确声明时创建全局 Agent。",
     "developerName": "KakaTelnet",
     "category": "Developer Tools",
     "capabilities": [
@@ -29,7 +29,7 @@
     ],
     "websiteURL": "https://github.com/KakaTelnet/Subagent-Creator",
     "defaultPrompt": [
-      "Use $subagent-creator to design a minimal project-scoped Codex subagent team unless I explicitly request personal scope."
+      "Use $subagent-creator to design a minimal project-scoped Codex subagent team unless I explicitly request global Agents."
     ]
   }
 }

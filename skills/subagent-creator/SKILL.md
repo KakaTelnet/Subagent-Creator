@@ -1,13 +1,13 @@
 ---
 name: subagent-creator
-description: 分析明确的执行需求，设计并创建最小充分、可幂等演进的 Codex 自定义 Subagent 团队。默认生成当前项目内可用的 `.codex/agents/*.toml`；仅当用户在本次请求中明确要求“全局”“个人级”“所有项目可用”或 personal scope 时，才生成 `~/.codex/agents/*.toml`。用于让低成本模型承担探索、测试、批量检查或简单编码，并为复杂判断保留强模型；也用于审查或更新现有 Agent、模型、权限、Skill、并行和升级策略。若需求仍有会改变团队形态的重大歧义，停止并返回 `BLOCKED_BY_REQUIREMENTS`。不要用于产品定义、完整技术架构设计、Task 拆分、业务编码、产品测试或最终验收。
+description: 分析明确的执行需求，设计并创建最小充分、可幂等演进的 Codex 自定义 Subagent 团队。默认生成当前项目内可用的 `.codex/agents/*.toml`；仅当用户在本次请求中明确要求“全局”或“所有项目可用”时，才生成 `~/.codex/agents/*.toml`。用于让低成本模型承担探索、测试、批量检查或简单编码，并为复杂判断保留强模型；也用于审查或更新现有 Agent、模型、权限、Skill、并行和升级策略。若需求仍有会改变团队形态的重大歧义，停止并返回 `BLOCKED_BY_REQUIREMENTS`。不要用于产品定义、完整技术架构设计、Task 拆分、业务编码、产品测试或最终验收。
 ---
 
 # Subagent Creator
 
 ## 目标
 
-构造一支由主 Agent 集中协调的最小充分团队。默认作用域为 `project`，只供当前项目使用；只有用户在本次请求中专项声明需要全局/个人级 Agent 时，才选择 `personal`，让角色可被所有项目发现。根据作用域内的执行事实生成角色，不套用固定的 planner/coder/tester 模板。
+构造一支由主 Agent 集中协调的最小充分团队。默认生成项目级团队，只供当前项目使用；只有用户在本次请求中专项声明需要全局 Agent 时，才选择内部 `personal` 作用域，让角色可被所有项目发现。根据作用域内的执行事实生成角色，不套用固定的 planner/coder/tester 模板。
 
 只配置团队基础设施；不要执行后续 Task Engineering、编码、测试或验收。
 
@@ -23,7 +23,7 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 - 使用有受控来源的模型注册表，并把配置可用、目录声明和真实调用探测分开报告。不要永久硬编码某一组模型或把调用者参数描述成已验证的账户权限。
 - 在满足任务能力和失败风险要求的前提下优先使用相对低成本模型。只生成成本感知的模型路由，不采集实际 Token、费用、调用次数、延迟或成功率，也不证明多 Agent 一定更省。
 - 让相同输入产生相同文件。不要因为再次运行而刷新时间戳、动作标签或重排内容。
-- 作用域采用拒绝推断原则：没有明确的个人级声明就固定使用 `project`。不得因为当前目录不是 Git 仓库、用户安装了全局 Skill、存在 `~/.codex` 或角色看起来可复用而自动选择 `personal`。
+- 作用域采用拒绝推断原则：没有明确的全局声明就固定使用项目级作用域。不得因为当前目录不是 Git 仓库、用户安装了全局 Skill、存在 `~/.codex` 或角色看起来可复用而自动选择内部 `personal` 作用域。
 
 ## 必读契约
 
@@ -33,32 +33,32 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 
 ### 1. 锁定作用域、上下文根与官方能力
 
-1. 先解析作用域。只有用户在**本次请求**中明确使用“全局”“个人级”“所有项目可用”“写入 `~/.codex/agents`”或等价 personal scope 表述时，才选择 `scope = personal`；否则不追问并固定使用默认 `scope = project`。
-2. 将显式目标目录作为上下文根；否则使用当前工作目录或 Git 根。上下文根用于读取需求和设计 Agent，不因 personal scope 而伪装成用户主目录。
+1. 先解析作用域。只有用户在**本次请求**中明确使用“全局”“所有项目可用”“写入 `~/.codex/agents`”或等价表述时，才选择内部 `scope = personal`；否则不追问并固定使用默认项目级 `scope = project`。对用户只称“全局”和“项目级”；`personal` 仅作为 CLI、Manifest 和代码中的内部标识。
+2. 将显式目标目录作为上下文根；否则使用当前工作目录或 Git 根。上下文根用于读取需求和设计 Agent，不因全局作用域而伪装成用户主目录。
 3. 解析目标路径：
    - `project`：Agent、配置与账本分别为 `<project>/.codex/agents/*.toml`、`<project>/.codex/config.toml`、`<project>/.codex/agent-team.toml`；
-   - `personal`：Agent 与配置分别为 `<CODEX_HOME>/agents/*.toml`、`<CODEX_HOME>/config.toml`，账本为 `<CODEX_HOME>/subagent-creator/agent-team.toml`；`CODEX_HOME` 未设置时使用 `~/.codex`。
-4. personal scope 写入前，在进度更新中明确复述用户的专项声明、解析后的 Codex Home 和将受影响的精确路径。没有专项声明时不得通过提问诱导升级作用域，也不得写个人级路径。
+   - 全局（内部 `personal`）：Agent 与配置分别为 `<CODEX_HOME>/agents/*.toml`、`<CODEX_HOME>/config.toml`，账本为 `<CODEX_HOME>/subagent-creator/agent-team.toml`；`CODEX_HOME` 未设置时使用 `~/.codex`。
+4. 全局写入前，在进度更新中明确复述用户的专项声明、解析后的 Codex Home 和将受影响的精确路径。没有专项声明时不得通过提问诱导升级作用域，也不得写全局路径。
 5. 读取适用的 `AGENTS.md`、项目 Git 状态和写入限制。不要覆盖不相关的 dirty/untracked 文件。
 6. 以本 Skill 已审查的契约和字段投影作为离线基线。当前会话可用 `openai-docs` 时，核对官方 **Subagents** 与 **Configuration Reference**；无法联网或无法取得文档不阻止普通配置生成，仓库 CI 负责持续对照官方 JSON Schema 和 Subagents 文档。
 7. 使用本 Skill 的离线严格字段投影验证将要生成的 Agent TOML 和目标作用域的 `[agents]` 设置。普通生成流程不能依赖实时下载官方 Schema。
 8. 可执行 `codex --version`，或读取宿主明确公开的等价运行时版本，作为可选宿主增强证据。缺少版本只报告 `UNVERIFIED`，不阻止配置生成；显式证据过旧、非法或属于未审查系列时，不得宣布 `AGENT_TEAM_READY`。
 9. 若当前官方文档已与本 Skill 的本地字段投影冲突，返回 `BLOCKED_BY_CODEX_COMPATIBILITY`。先更新本 Skill 的契约、验证器和测试，不要在目标作用域中临时扩展未知字段。
 
-当前基线只作为待验证假设：项目 Agent 位于 `.codex/agents/*.toml`，个人 Agent 位于 `~/.codex/agents/*.toml`，每个文件至少包含 `name`、`description`、`developer_instructions`；对应作用域设置位于各自 `config.toml` 的 `[agents]`。
+当前基线只作为待验证假设：项目级 Agent 位于 `.codex/agents/*.toml`，全局 Agent 位于 `~/.codex/agents/*.toml`，每个文件至少包含 `name`、`description`、`developer_instructions`；对应作用域设置位于各自 `config.toml` 的 `[agents]`。
 
 ### 2. 执行需求就绪 Gate
 
 `project` 作用域优先读取 Product Spec、Current Product Model、Change Spec，以及存在时的 Technical Spec、Architecture、Verification Contract。通过仓库结构和代码验证文档，不用聊天记忆替代 Artifact。
 
-`personal` 作用域不要求项目 Product Spec，但用户必须清楚说明可复用角色的职责、适用触发条件、非目标、权限边界和期望输出。只把当前仓库作为设计参考，不把仓库路径、专有 API 或项目 Artifact 固化进个人 Agent。
+全局作用域不要求项目 Product Spec，但用户必须清楚说明可复用角色的职责、适用触发条件、非目标、权限边界和期望输出。只把当前仓库作为设计参考，不把仓库路径、专有 API 或项目 Artifact 固化进全局 Agent。
 
 仅当以下条件成立时继续：
 
 - 要实现或变更的产品结果可陈述；
 - 主要范围、非目标和关键约束已明确；
 - 不存在会改变团队形态的重大产品歧义；
-- 项目很简单或角色是个人级可复用能力时，现有说明仍足以判断所需执行能力。
+- 项目很简单或角色是全局可复用能力时，现有说明仍足以判断所需执行能力。
 
 若不成立：
 
@@ -80,7 +80,7 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 - 当前 Codex 运行时版本及其独立来源；
 - 现有 Agent 的所有权：受本 Skill 管理、用户管理或来源不明。
 
-不要采用同名但非本 Skill 管理的 Agent。还要检查当前项目与个人 Agent 是否重名；跨作用域同名可能造成发现结果含糊，应返回 `BLOCKED_BY_AGENT_CONFLICT` 并给出两个路径，而不是猜测优先级。
+不要采用同名但非本 Skill 管理的 Agent。还要检查当前项目级与全局 Agent 是否重名；跨作用域同名可能造成发现结果含糊，应返回 `BLOCKED_BY_AGENT_CONFLICT` 并给出两个路径，而不是猜测优先级。
 
 ### 4. 建立动态 Model Registry
 
@@ -108,7 +108,7 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 - 风险：架构、数据、安全、兼容、性能和回归；
 - 项目约束和 Artifact 路径。
 
-不要借此补做缺失的完整 Technical Design。只基于已确认方向设计当前阶段能力。Manifest 只保留重新生成和对账所需的 `summary`、`artifact_paths` 与 `constraints`，不要复制完整规格。personal scope 的 `artifact_paths` 必须为空，保证个人 Agent 不依赖某个仓库。
+不要借此补做缺失的完整 Technical Design。只基于已确认方向设计当前阶段能力。Manifest 只保留重新生成和对账所需的 `summary`、`artifact_paths` 与 `constraints`，不要复制完整规格。全局作用域的 `artifact_paths` 必须为空，保证全局 Agent 不依赖某个仓库。
 
 ### 6. 设计最小充分角色
 
@@ -167,7 +167,7 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 
 1. 更新或创建当前作用域的 `agents/*.toml`；
 2. 必要时只修改当前作用域 `config.toml` 中明确需要的 `[agents]` 标量，不重写其他设置；
-3. 仅在 project scope 且确有长期协作 Gate 时，更新项目 `AGENTS.md` 中 `subagent-creator` 受控标记块；personal scope 不修改任何项目的 `AGENTS.md`；
+3. 仅在项目级作用域且确有长期协作 Gate 时，更新项目 `AGENTS.md` 中 `subagent-creator` 受控标记块；全局作用域不修改任何项目的 `AGENTS.md`；
 4. 最后写当前作用域的 `agent-team.toml`；
 5. 在运行结果中报告 CREATE / UPDATE / KEEP / RETIRE，不把本次动作写进 Manifest。
 
@@ -182,7 +182,7 @@ Manifest 使用稳定的 `last_changed_at`。仅在语义内容变化时更新�
 ### 9. 验证
 
 1. 本 Skill 的验证器因使用标准库 `tomllib`，要求 Python 3.11 或更高版本。先按目标 `AGENTS.md` 验证 pyenv/venv 路径和 `python3 --version`，再运行验证器。若目标项目 venv 低于 3.11，可在项目规则允许时使用独立的、pyenv 管理的 Python 3.11+ 验证专用 venv；验证器是只读的，不导入目标应用依赖。
-2. project scope 运行：`scripts/validate_team.py --root <project-root>`。personal scope 只有在用户已专项声明后运行：`scripts/validate_team.py --root <context-root> --scope personal --codex-home <codex-home> --personal-scope-authorized`。验证器离线严格检查目标作用域的受管 Agent、`[agents]`、轻量 Manifest、所有权、模型路由、路径与编排约束；不要求权限、版本或真实模型调用证据。
+2. 项目级作用域运行：`scripts/validate_team.py --root <project-root>`。全局作用域只有在用户已专项声明后运行：`scripts/validate_team.py --root <context-root> --scope personal --codex-home <codex-home> --personal-scope-authorized`。其中 `personal` 只属于机器接口。验证器离线严格检查目标作用域的受管 Agent、`[agents]`、轻量 Manifest、所有权、模型路由、路径与编排约束；不要求权限、版本或真实模型调用证据。
 3. 有外部证据时再附加 `--availability-source <source> --available-model <model-id> ... --permission-evidence-source <source> --agent-runtime-sandbox <agent>=<mode> --agent-runtime-approval-policy <agent>=<policy> --codex-version <observed-version> --codex-version-source <source>`。每个目录模型重复一次 `--available-model`；每个 Agent 重复一组实际 sandbox 与 approval policy；父线程权限可用 `--runtime-sandbox` 和 `--runtime-approval-policy` 作为上下文传入。若完成真实模型调用，再用 `--model-probe-source successful_model_probe` 和重复的 `--probed-model` 传入。CLI 参数是调用者转述，只能达到 `CALLER_ASSERTED`，不能冒充宿主验证。只有宿主集成可通过 Python API 提供 `HostPermissionEvidence`；显式要求可选完整就绪时使用 `--require-host-readiness`（兼容别名为 `--require-runtime-permissions`）。
 4. 若无法取得 Python 3.11+ 环境，按验证脚本的同等规则人工检查并明确标注未运行脚本；不要伪造通过。配置自洽时最多声明 `AGENT_TEAM_CONFIGURATION_READY`。
 5. 正常完成确认顶层 `status = PASS`、`configuration_status = PASS`、`local_codex_schema.status = PASS`、`readiness_status = AGENT_TEAM_CONFIGURATION_READY` 或更高。此时模型、权限和 `runtime_codex_compatibility.status` 均可为 `UNVERIFIED`。模型的 `CALLER_ASSERTED` 表示目录声明完整，`VERIFIED` 才表示全部模型真实探测成功；权限只有 `HOST_VERIFIED` 才支持 `AGENT_TEAM_READY`。再确认所有活动受管 Agent 可解析、无符号链接、名称唯一、必填字段齐全、五个 instructions 段非空、模型存在于 registry、Skill 路径存在、配置默认 sandbox 与 Manifest 一致。

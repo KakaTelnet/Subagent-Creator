@@ -1,7 +1,7 @@
 [project]
 name = "subagent-creator"
 version = "0.1.0"
-description = "Codex Skill-only Plugin for project-scoped and explicitly authorized personal Subagent teams."
+description = "Codex Skill-only Plugin for project-scoped and explicitly authorized global Subagent teams."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "AGPL-3.0-only"

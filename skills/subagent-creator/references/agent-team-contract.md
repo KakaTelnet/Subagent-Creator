@@ -2,16 +2,16 @@
 
 ## 1. 输出边界
 
-`subagent-creator` 支持两个互斥作用域。默认始终是 `project`；`personal` 必须由用户在本次请求中专项声明，不得从目录、安装方式或角色可复用性推断。
+`subagent-creator` 支持两个互斥作用域：项目级和全局。默认始终是项目级；全局必须由用户在本次请求中专项声明，不得从目录、安装方式或角色可复用性推断。`project` 和 `personal` 仅作为 CLI、Manifest 与代码内部标识；面向用户统一称“项目级”和“全局”。
 
 | 作用域 | Agent | 配置 | 生成器账本 | `AGENTS.md` |
 | --- | --- | --- | --- | --- |
-| `project`（默认） | `<project>/.codex/agents/<name>.toml` | `<project>/.codex/config.toml` 的 `[agents]` | `<project>/.codex/agent-team.toml` | 可选受控标记块 |
-| `personal`（需明确声明） | `<CODEX_HOME>/agents/<name>.toml` | `<CODEX_HOME>/config.toml` 的 `[agents]` | `<CODEX_HOME>/subagent-creator/agent-team.toml` | 不修改 |
+| 项目级（内部 `project`，默认） | `<project>/.codex/agents/<name>.toml` | `<project>/.codex/config.toml` 的 `[agents]` | `<project>/.codex/agent-team.toml` | 可选受控标记块 |
+| 全局（内部 `personal`，需明确声明） | `<CODEX_HOME>/agents/<name>.toml` | `<CODEX_HOME>/config.toml` 的 `[agents]` | `<CODEX_HOME>/subagent-creator/agent-team.toml` | 不修改 |
 
-两种作用域都可在各自 `agents/retired/<name>.toml.retired` 保存已退役且可恢复的受管定义。`CODEX_HOME` 优先使用当前环境的显式值，否则为 `~/.codex`。personal scope 的上下文根仍是当前项目或用户指定目录，只用于设计，不作为个人配置的写入根。
+两种作用域都可在各自 `agents/retired/<name>.toml.retired` 保存已退役且可恢复的受管定义。`CODEX_HOME` 优先使用当前环境的显式值，否则为 `~/.codex`。全局作用域的上下文根仍是当前项目或用户指定目录，只用于设计，不作为全局配置的写入根。
 
-personal scope 的专项声明必须来自当前用户请求，例如“创建全局 Subagent”“创建个人级 Agent”“让所有项目可用”。历史偏好、推测或调用者自己添加 `--scope personal` 都不能替代用户授权。验证器要求同时传入 `--personal-scope-authorized`，但该标志只能记录为 `CALLER_ASSERTED`；执行 Skill 的主 Agent 仍负责核对原始用户文字，并在写入前展示解析后的 Codex Home 与精确目标文件。
+全局作用域的专项声明必须来自当前用户请求，例如“创建全局 Subagent”或“让所有项目可用”。历史偏好、推测或调用者自己添加 `--scope personal` 都不能替代用户授权。验证器要求同时传入 `--personal-scope-authorized`，但该标志只能记录为 `CALLER_ASSERTED`；执行 Skill 的主 Agent 仍负责核对原始用户文字，并在写入前展示解析后的 Codex Home 与精确目标文件。
 
 不要覆盖用户拥有的 Agent、当前作用域 `config.toml` 的其他设置或 `AGENTS.md` 其他内容。
 
@@ -118,12 +118,12 @@ managed = true
 
 ### 3.1 顶层字段
 
-- `schema_version`：新生成 Manifest 固定为整数 `3`；验证器继续只读兼容仅支持 project scope 的旧版 `1` 和 `2`；
+- `schema_version`：新生成 Manifest 固定为整数 `3`；验证器继续只读兼容仅支持项目级作用域的旧版 `1` 和 `2`；
 - `generator`：固定为 `subagent-creator`；
 - `status`：验证前可在内存中视为 draft，写入就绪 Manifest 时固定为 `ready`；
 - `last_changed_at`：使用带时区的 RFC 3339 时间戳，只在团队语义变化时更新。KEEP 运行不得改变；
-- `scope`：固定为 `project` 或 `personal`，且必须与调用验证器时选择的作用域一致；
-- `context`：仅保留重新生成所需的摘要、Artifact 路径和约束；personal scope 的 `artifact_paths` 必须为空，防止个人 Agent 固化项目依赖；
+- `scope`：固定为内部标识 `project` 或 `personal`，且必须与调用验证器时选择的作用域一致；
+- `context`：仅保留重新生成所需的摘要、Artifact 路径和约束；全局作用域的 `artifact_paths` 必须为空，防止全局 Agent 固化项目依赖；
 - `orchestration`：中央协调、并发、失败流和串并行约束；
 - `model_registry.models`：本次设计实际引用的模型及其可用性证据；
 - `agents`：活动的受管 Subagent。主 Agent 不在这里重复定义。
@@ -141,7 +141,7 @@ Manifest 是生成器的轻量账本，不是第二份 Agent prompt。每个 Age
 
 `sandbox_mode` 表示 Agent 文件和 Manifest 中声明的**配置默认值**，不是对 spawned Agent 最终有效权限的绝对保证。Codex 会在 spawn 时重新应用父线程当前生效的 sandbox 和 approval override；因此，配置默认值与本次父线程实际权限必须分开验证。`developer_instructions` 中的 `Boundaries:` 是行为约束，不是操作系统级权限。
 
-project scope 的 `agents.file` 使用项目相对路径，例如 `.codex/agents/code-mapper.toml`；personal scope 使用 Codex Home 相对路径，例如 `agents/code-mapper.toml`。两者都禁止绝对路径和 `..`。个人 Agent 的 instructions 不得嵌入上下文项目的路径、私有 API 或只在该项目存在的 Artifact。
+项目级作用域的 `agents.file` 使用项目相对路径，例如 `.codex/agents/code-mapper.toml`；全局作用域使用 Codex Home 相对路径，例如 `agents/code-mapper.toml`。两者都禁止绝对路径和 `..`。全局 Agent 的 instructions 不得嵌入上下文项目的路径、私有 API 或只在该项目存在的 Artifact。
 
 ### 3.3 Model Registry
 
@@ -236,7 +236,7 @@ max_concurrent_threads_per_session = 3
 
 `max_concurrent_threads_per_session` 只计 spawned Agent，不计主线程。若项目或平台限制更低，采用更低值。更新时解析现有 TOML，并对 `[agents]` 的目标标量做最小编辑；不要序列化重写整个文件。
 
-独立 Agent TOML 是当前官方首选发现机制，因此无需为每个 standalone Agent 再写 `[agents.<role>]` 注册项。project scope 使用 `.codex/agents/*.toml`；personal scope 使用 `<CODEX_HOME>/agents/*.toml`。更新个人 `config.toml` 时同样只允许最小修改 `[agents]`，不得重写用户的模型、MCP、approval 或其他全局设置。
+独立 Agent TOML 是当前官方首选发现机制，因此无需为每个 standalone Agent 再写 `[agents.<role>]` 注册项。项目级作用域使用 `.codex/agents/*.toml`；全局作用域使用 `<CODEX_HOME>/agents/*.toml`。更新全局 `config.toml` 时同样只允许最小修改 `[agents]`，不得重写用户的模型、MCP、approval 或其他全局设置。
 
 ## 5. AGENTS.md 受控块
 
@@ -253,7 +253,7 @@ max_concurrent_threads_per_session = 3
 
 已有单个完整标记块时原地更新。不存在时追加。出现半个标记、多组标记或与用户内容冲突时，停止并返回 `BLOCKED_BY_AGENTS_MD_CONFLICT`。
 
-本节仅适用于 project scope。personal scope 不得向上下文项目或任何其他项目写入 `AGENTS.md`。
+本节仅适用于项目级作用域。全局作用域不得向上下文项目或任何其他项目写入 `AGENTS.md`。
 
 ## 6. 生命周期与所有权
 
@@ -263,7 +263,7 @@ max_concurrent_threads_per_session = 3
 - `RETIRE`：受管角色已无必要，移动到当前作用域的 `agents/retired/` 并添加 `.retired` 后缀；
 - `BLOCKED_BY_AGENT_CONFLICT`：同名活动文件不是受管文件，或 Manifest 所有权不清。
 
-退役是可恢复移动，不是删除。不要自动清理 `retired/`。重新启用角色时，比较归档内容后移动、更新或创建，确保活动目录只有一个同名 Agent。生成前同时检查上下文项目和当前个人 Agent 目录；同名跨作用域定义可能造成发现歧义，必须返回 `BLOCKED_BY_AGENT_CONFLICT` 并交由用户改名或退休其中一个。
+退役是可恢复移动，不是删除。不要自动清理 `retired/`。重新启用角色时，比较归档内容后移动、更新或创建，确保活动目录只有一个同名 Agent。生成前同时检查上下文项目和当前全局 Agent 目录；同名跨作用域定义可能造成发现歧义，必须返回 `BLOCKED_BY_AGENT_CONFLICT` 并交由用户改名或退休其中一个。
 
 ## 7. 幂等规则
 
@@ -274,9 +274,9 @@ max_concurrent_threads_per_session = 3
 - 无关文件修改；
 - 数组或 TOML 表的非语义性重排。
 
-构造期望状态时使用稳定排序：模型按 `id` 严格升序，Agent 按 `name` 严格升序，集合型字符串数组按字典序且不得重复；有执行顺序语义的 `failure_flow`、`parallel_policy` 和 `serial_policy` 保持逻辑顺序。`serializes_with` 只能引用存在的其他 Agent，不能引用自己，并且关系必须对称。每个活动 Agent 必须引用当前作用域唯一的 Agent TOML 文件，不能由多个 Manifest Agent 共用同一文件。project scope 的 `context.artifact_paths` 每一项必须指向项目根内已存在的普通文件，不能只指向目录；personal scope 必须为空。
+构造期望状态时使用稳定排序：模型按 `id` 严格升序，Agent 按 `name` 严格升序，集合型字符串数组按字典序且不得重复；有执行顺序语义的 `failure_flow`、`parallel_policy` 和 `serial_policy` 保持逻辑顺序。`serializes_with` 只能引用存在的其他 Agent，不能引用自己，并且关系必须对称。每个活动 Agent 必须引用当前作用域唯一的 Agent TOML 文件，不能由多个 Manifest Agent 共用同一文件。项目级作用域的 `context.artifact_paths` 每一项必须指向项目根内已存在的普通文件，不能只指向目录；全局作用域必须为空。
 
-所有受管路径及其从对应作用域根开始的父目录都必须是普通目录或普通文件，不能是符号链接。project scope 从项目根检查；personal scope 从 Codex Home 检查。写入前使用不跟随链接的文件状态检查；发现目标配置目录、Agent、Manifest、配置或项目 Artifact 路径包含符号链接时，停止并返回 `BLOCKED_BY_UNSAFE_PATH`，不得读取链接目标后继续写入。
+所有受管路径及其从对应作用域根开始的父目录都必须是普通目录或普通文件，不能是符号链接。项目级作用域从项目根检查；全局作用域从 Codex Home 检查。写入前使用不跟随链接的文件状态检查；发现目标配置目录、Agent、Manifest、配置或项目 Artifact 路径包含符号链接时，停止并返回 `BLOCKED_BY_UNSAFE_PATH`，不得读取链接目标后继续写入。
 
 写入前比较完整目标字节。相同则不执行写操作。语义变化时统一更新 Manifest 的 `last_changed_at`，否则保留原值。
 
@@ -289,9 +289,9 @@ max_concurrent_threads_per_session = 3
 
 正常完成以下项目后输出 `AGENT_TEAM_CONFIGURATION_READY`，并以退出码 `0` 结束：
 
-- 作用域已锁定；personal scope 具有用户本次请求中的专项声明，project scope 无需声明；
+- 作用域已锁定；全局作用域具有用户本次请求中的专项声明，项目级作用域无需声明；
 - 对应作用域的需求 Gate 通过；
-- 已分析执行特点，Manifest 只保留重新生成所需的摘要、Artifact 和约束；personal scope 不保留项目 Artifact；
+- 已分析执行特点，Manifest 只保留重新生成所需的摘要、Artifact 和约束；全局作用域不保留项目 Artifact；
 - 最小充分角色和不可合并理由已经审查；
 - 所有 Agent 的职责、边界、模型、权限、Skill、输入、输出和升级完整；
 - 默认和升级模型均有有效的受控配置来源；真实模型探测作为增强证据单独报告；
@@ -309,7 +309,7 @@ max_concurrent_threads_per_session = 3
 python3 scripts/validate_team.py --root <project-root>
 ```
 
-personal scope 只有在用户已明确声明时使用，并要求显式授权参数：
+全局作用域只有在用户已明确声明时使用，并要求显式授权参数；`personal` 仅是机器接口标识：
 
 ```bash
 python3 scripts/validate_team.py \
@@ -348,7 +348,7 @@ python3 scripts/validate_team.py \
 
 验证报告同时包含：
 
-- `scope`：请求作用域、Manifest 作用域、个人级授权状态及实际受管路径；
+- `scope`：请求作用域、Manifest 作用域、全局授权状态及实际受管路径；
 - `configuration_status`：Manifest、Agent、作用域配置和文件所有权是否自洽；
 - `local_codex_schema.status`：受管 Agent TOML 和当前作用域 `[agents]` 是否通过本 Skill 的离线严格字段投影；
 - `readiness_status`：`AGENT_TEAM_CONFIGURATION_READY`、`AGENT_TEAM_READY` 或 `BLOCKED_BY_CONFIGURATION`；

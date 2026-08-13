@@ -484,7 +484,8 @@ class TeamValidator:
             return
         if self.scope == "personal" and not self.personal_scope_authorized:
             self.error(
-                "personal scope requires an explicit user declaration and "
+                "global scope (internal 'personal') requires an explicit user "
+                "declaration and "
                 "personal_scope_authorized=True"
             )
         if self.manifest_schema_version == 3:
@@ -505,7 +506,7 @@ class TeamValidator:
             if self.scope != "project":
                 self.error(
                     "manifest schema versions 1 and 2 are project-only; regenerate "
-                    "the personal configuration with schema version 3"
+                    "the global configuration with schema version 3"
                 )
 
     def validate_context(self, manifest: dict[str, Any]) -> None:
@@ -540,7 +541,7 @@ class TeamValidator:
                 if self.scope == "personal":
                     self.error(
                         "manifest.context.artifact_paths must be empty for reusable "
-                        "personal Agents"
+                        "global Agents"
                     )
                     continue
                 for index, raw_path in enumerate(values):
@@ -1236,7 +1237,7 @@ class TeamValidator:
             peer_agents_dir = None
         if peer_agents_dir is None or not peer_agents_dir.is_dir():
             return
-        peer_scope = "project" if self.scope == "personal" else "personal"
+        peer_scope = "project-level" if self.scope == "personal" else "global"
         for path in sorted(peer_agents_dir.glob("*.toml")):
             if path.is_symlink():
                 self.error(f"cross-scope Agent path must not be a symbolic link: {path}")
@@ -1249,7 +1250,7 @@ class TeamValidator:
             name = config.get("name")
             if isinstance(name, str) and name in self.configured_agent_names:
                 self.error(
-                    f"Agent name {name!r} conflicts with {peer_scope}-scope "
+                    f"Agent name {name!r} conflicts with a {peer_scope} "
                     f"definition: {path}"
                 )
 
@@ -1316,7 +1317,7 @@ class TeamValidator:
 
     def validate_scope_config(self, concurrency: int | None) -> None:
         """Validate Codex multi-agent settings for the selected scope."""
-        config_label = "personal Codex config" if self.scope == "personal" else "project Codex config"
+        config_label = "global Codex config" if self.scope == "personal" else "project Codex config"
         config = self.load_toml(self.config_path, config_label)
         if config is None:
             return
@@ -1465,6 +1466,7 @@ class TeamValidator:
             "root": str(self.root),
             "scope": {
                 "requested": self.scope,
+                "display_name": "global" if self.scope == "personal" else "project-level",
                 "manifest": self.manifest_scope,
                 "authorization_required": self.scope == "personal",
                 "authorization_status": (
@@ -1550,18 +1552,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--scope",
         choices=sorted(VALID_SCOPES),
         default="project",
-        help="Target scope; defaults to project",
+        help="Target scope: project or personal (global); defaults to project",
     )
     parser.add_argument(
         "--codex-home",
         type=Path,
-        help="Codex home for personal Agents; defaults to CODEX_HOME or ~/.codex",
+        help="Codex home for global Agents; defaults to CODEX_HOME or ~/.codex",
     )
     parser.add_argument(
         "--personal-scope-authorized",
         action="store_true",
         help=(
-            "Assert that the user explicitly requested personal/global Agents; "
+            "Assert that the user explicitly requested global Agents; "
             "required with --scope personal"
         ),
     )
@@ -1683,7 +1685,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(
             f"{report['readiness_status']}: subagent-creator "
-            f"{report['scope']['requested']} team at "
+            f"{report['scope']['display_name']} team at "
             f"{report['scope']['manifest_path']} "
             f"({report['checked_files']} files, fingerprint {report['fingerprint']})"
         )

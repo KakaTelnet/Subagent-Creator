@@ -485,6 +485,7 @@ class TeamValidatorTests(unittest.TestCase):
         report = json.loads(result.stdout)
         self.assertEqual(report["status"], "PASS")
         self.assertEqual(report["scope"]["requested"], "project")
+        self.assertEqual(report["scope"]["display_name"], "project-level")
         self.assertEqual(report["scope"]["manifest"], "project")
         self.assertEqual(report["scope"]["authorization_status"], "NOT_REQUIRED")
         self.assertEqual(
@@ -520,6 +521,7 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(report["status"], "PASS", report["errors"])
         self.assertEqual(report["configuration_status"], "PASS")
         self.assertEqual(report["scope"]["requested"], "personal")
+        self.assertEqual(report["scope"]["display_name"], "global")
         self.assertEqual(report["scope"]["manifest"], "personal")
         self.assertEqual(report["scope"]["authorization_status"], "CALLER_ASSERTED")
         self.assertEqual(
@@ -601,7 +603,7 @@ class TeamValidatorTests(unittest.TestCase):
         ).validate()
         self.assertEqual(report["configuration_status"], "FAIL")
         self.assertTrue(
-            any("conflicts with project-scope" in error for error in report["errors"]),
+            any("conflicts with a project-level" in error for error in report["errors"]),
             report["errors"],
         )
 
