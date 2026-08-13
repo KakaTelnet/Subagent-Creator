@@ -21,7 +21,7 @@ SKILL_ROOT = PROJECT_ROOT / "skills" / "construct-subagent"
 VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_team.py"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
-from validate_team import MANAGED_HEADER, TeamValidator  # noqa: E402
+from validate_team import HostPermissionEvidence, MANAGED_HEADER, TeamValidator  # noqa: E402
 
 
 AGENT_TOML = f'''{MANAGED_HEADER}
@@ -31,11 +31,19 @@ model = "economy-model"
 model_reasoning_effort = "low"
 sandbox_mode = "read-only"
 developer_instructions = """
-Responsibilities: map code paths and tests.
-Boundaries: do not edit files or redefine requirements.
-Inputs: read the Task Contract and AGENTS.md.
-Outputs: return exact file references.
-Escalation: return BLOCKED to the main agent on conflicts.
+Responsibilities:
+- Map affected code and tests.
+Boundaries:
+- Do not edit files.
+- Do not redefine requirements.
+- Read repository files only.
+Inputs:
+- AGENTS.md
+- Task Contract
+Outputs:
+- Evidence map with exact file references
+Escalation:
+- Conflicting architecture artifacts
 """
 '''
 
@@ -160,6 +168,22 @@ def manifest_with_reversed_models() -> str:
     )
 
 
+def host_permission_evidence(
+    *,
+    sandbox: str = "read-only",
+    approval_policy: str = "on-request",
+    parent_sandbox: str = "read-only",
+) -> HostPermissionEvidence:
+    """Return trusted host evidence for the default fixture Agent."""
+    return HostPermissionEvidence(
+        source="spawn_session_metadata",
+        agent_sandboxes={"code_mapper": sandbox},
+        agent_approval_policies={"code_mapper": approval_policy},
+        parent_sandbox=parent_sandbox,
+        parent_approval_policy="on-request",
+    )
+
+
 class TeamValidatorTests(unittest.TestCase):
     """Exercise validation, ownership, registry, and idempotency checks."""
 
@@ -189,11 +213,7 @@ class TeamValidatorTests(unittest.TestCase):
             self.root,
             available_models={"economy-model", "strong-model"},
             availability_source="runtime_model_registry",
-            runtime_sandbox="read-only",
-            runtime_approval_policy="on-request",
-            agent_runtime_sandboxes={"code_mapper": "read-only"},
-            agent_runtime_approval_policies={"code_mapper": "on-request"},
-            permission_evidence_source="spawn_session_metadata",
+            host_permission_evidence=host_permission_evidence(),
             require_runtime_permissions=True,
             codex_version="codex-cli 0.147.0-alpha.6.5",
             codex_version_source="codex_cli",
@@ -208,7 +228,8 @@ class TeamValidatorTests(unittest.TestCase):
             first["runtime_model_availability"]["status"],
             "CALLER_ASSERTED",
         )
-        self.assertEqual(first["runtime_permissions"]["status"], "VERIFIED")
+        self.assertEqual(first["runtime_permissions"]["status"], "HOST_VERIFIED")
+        self.assertEqual(first["readiness_status"], "AGENT_TEAM_READY")
         self.assertEqual(first["runtime_codex_compatibility"]["status"], "VERIFIED")
         self.assertEqual(
             first["runtime_codex_compatibility"]["normalized_version"],
@@ -445,6 +466,10 @@ class TeamValidatorTests(unittest.TestCase):
         report = TeamValidator(self.root).validate()
         self.assertEqual(report["status"], "FAIL")
         self.assertEqual(report["configuration_status"], "PASS")
+        self.assertEqual(
+            report["readiness_status"],
+            "AGENT_TEAM_CONFIGURATION_READY",
+        )
         self.assertEqual(report["runtime_model_availability"]["status"], "UNVERIFIED")
         self.assertTrue(report["runtime_model_availability"]["configuration_usable"])
         self.assertEqual(report["runtime_model_availability"]["errors"], [])
@@ -452,9 +477,7 @@ class TeamValidatorTests(unittest.TestCase):
     def test_configuration_only_model_evidence_can_still_be_ready(self) -> None:
         report = TeamValidator(
             self.root,
-            agent_runtime_sandboxes={"code_mapper": "read-only"},
-            agent_runtime_approval_policies={"code_mapper": "on-request"},
-            permission_evidence_source="spawn_session_metadata",
+            host_permission_evidence=host_permission_evidence(),
             require_runtime_permissions=True,
             codex_version="codex-cli 0.147.0-alpha.6.5",
             codex_version_source="codex_cli",
@@ -463,6 +486,7 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(report["configuration_status"], "PASS")
         self.assertEqual(report["runtime_model_availability"]["status"], "UNVERIFIED")
         self.assertTrue(report["runtime_model_availability"]["configuration_usable"])
+        self.assertEqual(report["readiness_status"], "AGENT_TEAM_READY")
 
     def test_model_absent_from_runtime_evidence_fails(self) -> None:
         report = TeamValidator(
@@ -544,26 +568,65 @@ class TeamValidatorTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         report = json.loads(result.stdout)
         self.assertEqual(report["configuration_status"], "PASS")
         self.assertEqual(
             report["runtime_model_availability"]["status"],
             "CALLER_ASSERTED",
         )
-        self.assertEqual(report["runtime_permissions"]["status"], "VERIFIED")
+        self.assertEqual(report["runtime_permissions"]["status"], "CALLER_ASSERTED")
+        self.assertEqual(
+            report["readiness_status"],
+            "AGENT_TEAM_CONFIGURATION_READY",
+        )
+        self.assertTrue(
+            any("cannot satisfy strict" in error for error in report["errors"]),
+            report["errors"],
+        )
         self.assertEqual(report["runtime_codex_compatibility"]["status"], "VERIFIED")
+
+    def test_caller_asserted_permissions_allow_configuration_only_readiness(self) -> None:
+        report = TeamValidator(
+            self.root,
+            available_models={"economy-model", "strong-model"},
+            availability_source="runtime_model_registry",
+            agent_runtime_sandboxes={"code_mapper": "read-only"},
+            agent_runtime_approval_policies={"code_mapper": "on-request"},
+            permission_evidence_source="spawn_session_metadata",
+            codex_version="codex-cli 0.147.0",
+            codex_version_source="codex_cli",
+        ).validate()
+        self.assertEqual(report["status"], "PASS", report["errors"])
+        self.assertEqual(report["runtime_permissions"]["status"], "CALLER_ASSERTED")
+        self.assertEqual(
+            report["readiness_status"],
+            "AGENT_TEAM_CONFIGURATION_READY",
+        )
+
+    def test_invalid_host_approval_policy_fails(self) -> None:
+        report = TeamValidator(
+            self.root,
+            host_permission_evidence=host_permission_evidence(
+                approval_policy="approve-everything"
+            ),
+            require_runtime_permissions=True,
+            codex_version="codex-cli 0.147.0",
+            codex_version_source="codex_cli",
+        ).validate()
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["runtime_permissions"]["status"], "MISMATCH")
+        self.assertTrue(
+            any("observed approval policy must be one of" in error for error in report["errors"]),
+            report["errors"],
+        )
 
     def test_missing_codex_version_evidence_is_unverified(self) -> None:
         report = TeamValidator(
             self.root,
             available_models={"economy-model", "strong-model"},
             availability_source="runtime_model_registry",
-            runtime_sandbox="read-only",
-            runtime_approval_policy="on-request",
-            agent_runtime_sandboxes={"code_mapper": "read-only"},
-            agent_runtime_approval_policies={"code_mapper": "on-request"},
-            permission_evidence_source="spawn_session_metadata",
+            host_permission_evidence=host_permission_evidence(),
             require_runtime_permissions=True,
         ).validate()
         self.assertEqual(report["status"], "FAIL")
@@ -579,11 +642,7 @@ class TeamValidatorTests(unittest.TestCase):
             self.root,
             available_models={"economy-model", "strong-model"},
             availability_source="runtime_model_registry",
-            runtime_sandbox="read-only",
-            runtime_approval_policy="on-request",
-            agent_runtime_sandboxes={"code_mapper": "read-only"},
-            agent_runtime_approval_policies={"code_mapper": "on-request"},
-            permission_evidence_source="spawn_session_metadata",
+            host_permission_evidence=host_permission_evidence(),
             require_runtime_permissions=True,
             codex_version="codex-cli 0.145.0",
             codex_version_source="codex_cli",
@@ -688,17 +747,15 @@ class TeamValidatorTests(unittest.TestCase):
             self.root,
             available_models={"economy-model", "strong-model"},
             availability_source="runtime_model_registry",
-            runtime_sandbox="workspace-write",
-            runtime_approval_policy="on-request",
-            agent_runtime_sandboxes={"code_mapper": "read-only"},
-            agent_runtime_approval_policies={"code_mapper": "on-request"},
-            permission_evidence_source="spawn_session_metadata",
+            host_permission_evidence=host_permission_evidence(
+                parent_sandbox="workspace-write"
+            ),
             require_runtime_permissions=True,
             codex_version="codex-cli 0.147.0",
             codex_version_source="codex_cli",
         ).validate()
         self.assertEqual(report["status"], "PASS", report["errors"])
-        self.assertEqual(report["runtime_permissions"]["status"], "VERIFIED")
+        self.assertEqual(report["runtime_permissions"]["status"], "HOST_VERIFIED")
 
     def test_behavioral_boundaries_are_reported_as_instruction_only(self) -> None:
         report = self.validate()
@@ -710,6 +767,102 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(
             runtime_permissions["agents"][0]["behavioral_boundaries"],
             ["Do not edit files.", "Do not redefine requirements."],
+        )
+
+    def test_developer_instructions_require_all_contract_sections(self) -> None:
+        agent_path = self.root / ".codex" / "agents" / "code-mapper.toml"
+        agent_path.write_text(
+            AGENT_TOML.replace(
+                "Outputs:\n- Evidence map with exact file references\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+        report = self.validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("non-empty Outputs: section" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_developer_instructions_must_cover_manifest_items(self) -> None:
+        agent_path = self.root / ".codex" / "agents" / "code-mapper.toml"
+        agent_path.write_text(
+            AGENT_TOML.replace(
+                "- Do not edit files.",
+                "- Editing is allowed when convenient.",
+            ),
+            encoding="utf-8",
+        )
+        report = self.validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("does not cover Manifest item: Do not edit files." in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_manifest_symbolic_link_is_rejected(self) -> None:
+        manifest_path = self.root / ".codex" / "agent-team.toml"
+        target = self.root / "manifest-target.toml"
+        target.write_text(MANIFEST_TOML, encoding="utf-8")
+        manifest_path.unlink()
+        manifest_path.symlink_to(target)
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("must not use a symbolic link" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_agent_symbolic_link_is_rejected(self) -> None:
+        agent_path = self.root / ".codex" / "agents" / "code-mapper.toml"
+        target = self.root / "agent-target.toml"
+        target.write_text(AGENT_TOML, encoding="utf-8")
+        agent_path.unlink()
+        agent_path.symlink_to(target)
+        report = self.validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("must not use a symbolic link" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_project_config_symbolic_link_is_rejected(self) -> None:
+        config_path = self.root / ".codex" / "config.toml"
+        target = self.root / "config-target.toml"
+        target.write_text(CONFIG_TOML, encoding="utf-8")
+        config_path.unlink()
+        config_path.symlink_to(target)
+        report = self.validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("must not use a symbolic link" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_agent_parent_directory_symbolic_link_is_rejected(self) -> None:
+        agents_dir = self.root / ".codex" / "agents"
+        target = self.root / "real-agents"
+        agents_dir.rename(target)
+        agents_dir.symlink_to(target, target_is_directory=True)
+        report = self.validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("must not use a symbolic link" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_project_artifact_symbolic_link_is_rejected(self) -> None:
+        artifact = self.root / "ai_docs" / "notes" / "20260813-0000_product-spec.md"
+        target = self.root / "artifact-target.md"
+        target.write_text("# Product Spec\n", encoding="utf-8")
+        artifact.unlink()
+        artifact.symlink_to(target)
+        report = self.validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("must not use a symbolic link" in error for error in report["errors"]),
+            report["errors"],
         )
 
     def test_missing_registry_model_fails(self) -> None:

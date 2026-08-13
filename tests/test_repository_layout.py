@@ -94,6 +94,43 @@ class RepositoryLayoutTests(unittest.TestCase):
         )
         self.assertIn("agentskills validate skills/construct-subagent", workflow)
         self.assertIn("python3 scripts/validate_plugin.py .", workflow)
+        self.assertIn("python3 scripts/check_official_plugin_schema.py", workflow)
+
+    def test_ci_actions_are_pinned_to_immutable_commits(self) -> None:
+        workflow = (PROJECT_ROOT / ".github" / "workflows" / "validate.yml").read_text(
+            encoding="utf-8"
+        )
+        uses_lines = [
+            line.strip()
+            for line in workflow.splitlines()
+            if line.strip().startswith("uses:")
+        ]
+        self.assertTrue(uses_lines)
+        for line in uses_lines:
+            self.assertRegex(line, r"^uses: [^@]+@[0-9a-f]{40}(?:\s+#\s+v\d+)?$")
+
+    def test_dependabot_tracks_python_and_action_dependencies(self) -> None:
+        dependabot = (PROJECT_ROOT / ".github" / "dependabot.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("package-ecosystem: pip", dependabot)
+        self.assertIn("package-ecosystem: github-actions", dependabot)
+
+    def test_readiness_and_path_safety_contracts_are_distributed(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        contract = (SKILL_ROOT / "references" / "agent-team-contract.md").read_text(
+            encoding="utf-8"
+        )
+        validator = (SKILL_ROOT / "scripts" / "validate_team.py").read_text(
+            encoding="utf-8"
+        )
+        for content in (skill, contract, validator):
+            self.assertIn("AGENT_TEAM_CONFIGURATION_READY", content)
+            self.assertIn("AGENT_TEAM_READY", content)
+            self.assertIn("HOST_VERIFIED", content)
+        for content in (skill, contract):
+            self.assertIn("BLOCKED_BY_UNSAFE_PATH", content)
+        self.assertIn("find_symlink_component", validator)
 
     def test_python_compatibility_is_machine_readable_and_exercised(self) -> None:
         metadata_path = PROJECT_ROOT / "pyproject.toml"

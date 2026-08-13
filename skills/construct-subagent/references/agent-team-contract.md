@@ -29,20 +29,23 @@ model = "<verified-model-id>"
 model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 developer_instructions = """
-Read the applicable AGENTS.md and task artifacts before working.
-
 Responsibilities:
 - Locate entry points, ownership boundaries, and affected tests.
 
 Boundaries:
 - Do not edit files.
 - Do not redefine product requirements or architecture.
+- Read repository files only.
 
-Output:
+Inputs:
+- AGENTS.md
+- Task Contract
+
+Outputs:
 - Return concise evidence with exact file references.
 
 Escalation:
-- Return BLOCKED to the parent when required artifacts conflict or are missing.
+- Required artifacts conflict or are missing.
 """
 ```
 
@@ -54,7 +57,7 @@ path = "/absolute/path/to/a-skill"
 enabled = true
 ```
 
-`developer_instructions` 定义角色行为，至少覆盖职责、边界、输入、输出和升级。它引用项目 Artifact 路径或类型，不复制 Artifact 正文。
+`developer_instructions` 定义角色行为，必须包含非空的 `Responsibilities:`、`Boundaries:`、`Inputs:`、`Outputs:` 和 `Escalation:` 段。每段必须覆盖 Manifest 对应字段的原文事实；可以在这些事实之外增加自由说明，但不能省略职责、行为/权限边界、输入、输出或升级条件。它引用项目 Artifact 路径或类型，不复制 Artifact 正文。
 
 ## 3. Manifest schema
 
@@ -188,14 +191,19 @@ Agent 的默认与升级模型必须都在 registry 中，且 reasoning effort �
 
 ### 3.5 Runtime Permission Evidence
 
-权限是会话事实，不写入稳定 Manifest，也不参与 `last_changed_at` 或文件 fingerprint。完成验证时必须为每个 Agent 从可信宿主或 spawn session metadata 读取并传入：
+权限是会话事实，不写入稳定 Manifest，也不参与 `last_changed_at` 或文件 fingerprint。验证器区分两种证据边界：
+
+- CLI 的 `--permission-evidence-source`、`--agent-runtime-sandbox` 和 `--agent-runtime-approval-policy` 都是调用者提供的字符串，即使来源标签写成 `host_runtime` 或 `spawn_session_metadata`，也只能报告为 `CALLER_ASSERTED`；
+- 只有宿主集成直接通过 Python API 提供 `HostPermissionEvidence`，且逐 Agent 证据完整、合法并匹配配置默认值时，才报告 `HOST_VERIFIED`。
+
+CLI 可传入：
 
 - `--permission-evidence-source host_runtime|spawn_session_metadata`：证据来源；
 - `--agent-runtime-sandbox <agent>=<mode>`：该 Agent 实际生效的 sandbox；
 - `--agent-runtime-approval-policy <agent>=<policy>`：该 Agent 实际生效的 approval policy；
-- `--require-runtime-permissions`：要求每个 Agent 的证据完整且实际 sandbox 与其配置默认值一致。
+- `--require-runtime-permissions`：要求每个 Agent 的证据完整且达到 `HOST_VERIFIED`；CLI 自报参数不能满足该严格条件。
 
-`--runtime-sandbox` 和 `--runtime-approval-policy` 可继续记录父线程上下文，但不再拿一个父线程 sandbox 与所有 Agent 默认值逐一强制相等。验证器逐 Agent 比较自己的 `sandbox_mode` 配置默认值与该 Agent 的实际有效 sandbox，因此同一团队可以安全地同时包含 `read-only` 和 `workspace-write` Agent。缺失为 `UNVERIFIED`，不一致为 `MISMATCH`，完全一致为 `MATCH`。
+`--runtime-sandbox` 和 `--runtime-approval-policy` 可继续记录父线程上下文，但不再拿一个父线程 sandbox 与所有 Agent 默认值逐一强制相等。验证器逐 Agent 比较自己的 `sandbox_mode` 配置默认值与该 Agent 的实际有效 sandbox，因此同一团队可以同时包含 `read-only` 和 `workspace-write` Agent。approval policy 只接受当前官方标识 `untrusted`、`on-request`、`never` 或宿主归一化的 `granular`。缺失为 `UNVERIFIED`，非法或不一致为 `MISMATCH`，完全一致为 `MATCH`。
 
 运行时权限报告必须区分：
 
@@ -203,6 +211,8 @@ Agent 的默认与升级模型必须都在 registry 中，且 reasoning effort �
 - `observed_effective`：该 Agent 本次实际生效的 sandbox 与 approval policy；
 - `observed_parent`：可选的父线程 sandbox 与 approval policy 上下文；
 - `comparison_status`：每个 Agent 的 `MATCH`、`MISMATCH` 或 `UNVERIFIED`；
+- `status`：整体为 `HOST_VERIFIED`、`CALLER_ASSERTED`、`UNVERIFIED` 或 `MISMATCH`；
+- `evidence_trust`：`host_verified`、`caller_asserted` 或 `none`；
 - `behavioral_boundary_enforcement`：固定为 `developer_instructions_only`，明确行为边界不等于技术权限。
 
 ### 3.6 Runtime Codex Compatibility Evidence
@@ -279,9 +289,16 @@ max_concurrent_threads_per_session = 3
 
 构造期望状态时使用稳定排序：模型按 `id` 严格升序，Agent 按 `name` 严格升序，集合型字符串数组按字典序且不得重复；有执行顺序语义的 `failure_flow`、`parallel_policy` 和 `serial_policy` 保持逻辑顺序。`serializes_with` 只能引用存在的其他 Agent，不能引用自己，并且关系必须对称。每个活动 Agent 必须引用唯一的 `.codex/agents/*.toml` 文件，不能由多个 Manifest Agent 共用同一文件。`project.artifact_paths` 的每一项必须指向项目根内已存在的普通文件，不能只指向目录。
 
+所有受管路径及其从项目根开始的父目录都必须是普通目录或普通文件，不能是符号链接。写入前使用不跟随链接的文件状态检查；发现 `.codex`、`.codex/agents`、Manifest、项目配置、活动 Agent 或 Artifact 路径包含符号链接时，停止并返回 `BLOCKED_BY_UNSAFE_PATH`，不得读取链接目标后继续写入。
+
 写入前比较完整目标字节。相同则不执行写操作。语义变化时统一更新 Manifest 的 `last_changed_at`，否则保留原值。
 
 ## 8. 完成 Gate
+
+完成状态分为两层：
+
+- `AGENT_TEAM_CONFIGURATION_READY`：Manifest、Agent 文件、项目配置、所有权、指令契约、路径安全、模型分配和编排规则自洽，可以使用配置；它不声称当前 spawned Agent 权限已经由宿主验证；
+- `AGENT_TEAM_READY`：在配置就绪基础上，Codex 兼容性为 `VERIFIED`，且每个 Agent 的实际权限由宿主 API 直接提供并达到 `HOST_VERIFIED`。
 
 只有以下项目全部通过，才能输出 `AGENT_TEAM_READY`：
 
@@ -295,12 +312,13 @@ max_concurrent_threads_per_session = 3
 - 每个 Agent 的实际 sandbox 和 approval policy 已从可信来源独立观察，且实际 sandbox 与该 Agent 配置默认值一致；
 - 中央协调、失败流和串并行规则完整；
 - 活动受管 Agent 无重复、无孤儿、无名称冲突；
+- 所有受管路径无符号链接，Agent instructions 覆盖 Manifest 的职责、边界、输入、输出和升级事实；
 - Manifest 的时间戳、模型/Agent 排序、Agent 文件唯一性、Artifact 文件类型和升级强度均符合本契约；
 - 原生 Agent TOML、项目配置和 Manifest 可解析且一致；
 - `scripts/validate_team.py` 通过；
 - 第二次期望状态对账得到全 KEEP 和零文件 diff。
 
-模型证据 Gate 使用类似以下命令；模型列表必须来自本次运行的实际来源，不要从 Manifest 反向复制：
+配置与调用者声明证据可使用类似以下命令；模型列表必须来自本次运行的实际来源，不要从 Manifest 反向复制：
 
 ```bash
 python3 scripts/validate_team.py \
@@ -313,12 +331,11 @@ python3 scripts/validate_team.py \
   --permission-evidence-source spawn_session_metadata \
   --agent-runtime-sandbox <agent-name>=<observed-effective-sandbox> \
   --agent-runtime-approval-policy <agent-name>=<observed-effective-policy> \
-  --require-runtime-permissions \
   --codex-version <observed-codex-version> \
   --codex-version-source codex_cli
 ```
 
-每个 Agent 都要重复一组 `--agent-runtime-sandbox` 与 `--agent-runtime-approval-policy`。若本次还完成了真实模型调用，可额外传入：
+每个 Agent 都要重复一组 `--agent-runtime-sandbox` 与 `--agent-runtime-approval-policy`。该命令可以证明配置自洽并记录 `CALLER_ASSERTED` 权限，但因为 CLI 参数仍由调用者填写，不能单独产生 `AGENT_TEAM_READY`。只有宿主集成直接调用验证器并提供 `HostPermissionEvidence` 才能升级为 `HOST_VERIFIED`。若本次还完成了真实模型调用，可额外传入：
 
 ```bash
   --model-probe-source successful_model_probe \
@@ -329,9 +346,10 @@ python3 scripts/validate_team.py \
 验证报告同时包含：
 
 - `configuration_status`：Manifest、Agent、项目配置和文件所有权是否自洽；
+- `readiness_status`：`AGENT_TEAM_CONFIGURATION_READY`、`AGENT_TEAM_READY` 或 `BLOCKED_BY_CONFIGURATION`；
 - `runtime_model_availability.status`：`VERIFIED`、`CALLER_ASSERTED`、`UNVERIFIED` 或 `FAIL`；
-- `runtime_permissions.status`：`VERIFIED`、`UNVERIFIED` 或 `MISMATCH`；
+- `runtime_permissions.status`：`HOST_VERIFIED`、`CALLER_ASSERTED`、`UNVERIFIED` 或 `MISMATCH`；
 - `runtime_codex_compatibility.status`：`VERIFIED`、`UNVERIFIED`、`UNSUPPORTED_OLD` 或 `UNREVIEWED_NEWER`；
-- 顶层 `status`：配置必须通过；主动提供但矛盾的模型证据不得为 `FAIL`；严格模式下运行时权限和 Codex 兼容性必须为 `VERIFIED`。模型真实探测不是顶层 `PASS` 的强制条件。
+- 顶层 `status`：本次请求的验证条件是否通过；主动提供但矛盾的模型证据不得为 `FAIL`；严格模式下运行时权限必须为 `HOST_VERIFIED`，Codex 兼容性必须为 `VERIFIED`。模型真实探测不是顶层 `PASS` 的强制条件。
 
-`configuration_status = PASS` 表示团队配置可以使用，但不能据此声称模型已经真实调用成功。没有外部模型证据时报告 `UNVERIFIED`；目录证据完整时为 `CALLER_ASSERTED`；只有真实探测覆盖全部必需模型时为 `VERIFIED`。完成 Gate 必须使用 `--require-runtime-permissions`；任一 Agent 缺少实际权限证据时报告 `UNVERIFIED`，实际 sandbox 与自身配置默认值不一致时报告 `MISMATCH`，两者都不得宣布团队就绪。Codex 版本证据缺失、过旧或高于已审查系列时同样保持顶层 `FAIL`，且不得先写目标团队文件再补做兼容性判断。
+`configuration_status = PASS` 表示团队配置可以使用，并对应 `AGENT_TEAM_CONFIGURATION_READY`，但不能据此声称模型已经真实调用成功或 spawned Agent 权限已经由宿主验证。模型没有外部证据时报告 `UNVERIFIED`，目录证据完整时为 `CALLER_ASSERTED`，只有真实探测覆盖全部必需模型时为 `VERIFIED`。权限由 CLI 完整提供且匹配时为 `CALLER_ASSERTED`；任一 Agent 缺少证据时为 `UNVERIFIED`，值非法或实际 sandbox 与自身配置默认值不一致时为 `MISMATCH`。只有宿主直接证据为 `HOST_VERIFIED` 才能宣布 `AGENT_TEAM_READY`。Codex 版本证据缺失、过旧或高于已审查系列时不得宣布完整就绪，且不得先写目标团队文件再补做兼容性判断。

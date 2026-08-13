@@ -20,6 +20,7 @@ which python3
 which pip3
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 python3 skills/construct-subagent/scripts/validate_team.py --help
+python3 scripts/check_official_plugin_schema.py
 ```
 
 Pull Request 应说明行为变化、兼容性影响和实际运行的验证命令。涉及模型或 Codex 配置 schema 的变化，还应附当前官方文档依据。

@@ -50,7 +50,7 @@ Codex Subagent 可以并行承担代码检索、实现、测试、调试和审�
   -> 模型、权限、配置联合验证
 ```
 
-只有全部强制 Gate 和验证都通过，Skill 才会返回 `AGENT_TEAM_READY`；模型真实调用探测作为独立的增强证据报告，不会与配置就绪状态混为一谈。
+Skill 使用两层就绪状态：文件、模型分配和编排契约自洽时返回 `AGENT_TEAM_CONFIGURATION_READY`；只有逐 Agent 权限由宿主直接验证后才返回 `AGENT_TEAM_READY`。模型真实调用探测仍作为独立的增强证据报告，不会与配置或权限就绪状态混为一谈。
 
 ## 它解决什么问题
 
@@ -75,11 +75,13 @@ Skill 会分析项目规模、技术复杂度、主要任务、共享文件、�
 - 父线程本次运行的权限上下文；
 - 只能依靠 `developer_instructions` 约束的角色行为边界。
 
-它不会把“提示词要求只读”描述成系统级只读，也不会用父线程的单一 sandbox 错误否定由 `read-only` 与 `workspace-write` 组成的混合权限团队。严格验证会逐 Agent 对比配置默认值和实际有效权限。
+它不会把“提示词要求只读”描述成系统级只读，也不会用父线程的单一 sandbox 错误否定由 `read-only` 与 `workspace-write` 组成的混合权限团队。严格验证会逐 Agent 对比配置默认值和实际有效权限。命令行转述的权限证据只标记为 `CALLER_ASSERTED`；只有宿主 API 直接提供的证据才能标记为 `HOST_VERIFIED`。
 
 ### 安全地演进已有团队
 
 Skill 只管理带有明确所有权标记的 Agent 文件，并使用 `CREATE`、`UPDATE`、`KEEP`、`RETIRE` 对账期望状态。用户维护的 Agent 和无关配置会被保留；退役角色会进入可恢复的 `retired/` 目录，而不是被直接删除。相同输入再次运行时应得到全 `KEEP` 和零文件 diff。
+
+受管路径及其父目录不能是符号链接。发现 `.codex`、Agent、Manifest、项目配置或 Artifact 路径包含链接时，Skill 会停止并返回 `BLOCKED_BY_UNSAFE_PATH`，避免读取一个路径却覆盖另一个文件。
 
 ## 使用前提
 
@@ -151,7 +153,7 @@ Skill 随后会：
 
 完成报告会给出：
 
-- `AGENT_TEAM_READY` 或明确的 BLOCKED 状态；
+- `AGENT_TEAM_CONFIGURATION_READY`、`AGENT_TEAM_READY` 或明确的 BLOCKED 状态；
 - 每个角色的 `CREATE` / `UPDATE` / `KEEP` / `RETIRE` 动作；
 - 默认模型、升级模型、sandbox、职责和调用时机；
 - 中央协调、失败升级、并行和串行规则；
@@ -172,13 +174,13 @@ Skill 随后会：
 
 ## 验证器
 
-Skill 包含只读验证器 `skills/construct-subagent/scripts/validate_team.py`。它会联合检查团队 Manifest、Agent TOML、Skill 路径、模型分配、升级强度、成本多指标、文件所有权、项目并发配置、逐 Agent 实际权限和当前 Codex 版本兼容性。
+Skill 包含只读验证器 `skills/construct-subagent/scripts/validate_team.py`。它会联合检查团队 Manifest、Agent TOML、Skill 路径、模型分配、升级强度、成本多指标、文件所有权、符号链接、指令关键事实、项目并发配置、逐 Agent 实际权限和当前 Codex 版本兼容性。
 
-验证器要求 Python 3.11+。模型目录参数只会得到 `CALLER_ASSERTED`，覆盖全部必需模型的成功调用才得到 `VERIFIED`；没有探测时，有效配置仍可使用。严格就绪检查要求每个 Agent 的 sandbox 和 approval policy 来自可信宿主或 spawn metadata，并逐一匹配配置默认值。Codex 版本低于 `0.145.0` 或高于已审查的 `0.147.x` 时仍会阻止就绪状态。
+验证器要求 Python 3.11+。模型目录参数只会得到 `CALLER_ASSERTED`，覆盖全部必需模型的成功调用才得到 `VERIFIED`；没有探测时，有效配置仍可使用。权限 CLI 参数同样只能得到 `CALLER_ASSERTED`，可形成配置就绪状态；完整就绪要求宿主直接提供 `HostPermissionEvidence`，并逐一匹配 sandbox 默认值和官方支持的 approval policy。Codex 版本低于 `0.145.0` 或高于已审查的 `0.147.x` 时仍会阻止完整就绪状态。
 
 ## 仓库验证
 
-仓库测试使用隔离 fixture 覆盖混合权限、模型证据分层、成本指标和失败路径，不要求 CI 真实调用模型。Plugin 校验器对本项目使用的字段保持严格检查，同时用兼容性 fixture 覆盖官方 Schema 已支持的 `hooks`、`supportURL`、`brandColorDark` 和字符串或数组形式的 `defaultPrompt`。
+仓库测试使用隔离 fixture 覆盖混合权限、模型/权限证据分层、指令契约、符号链接、成本指标和失败路径，不要求 CI 真实调用模型。Plugin 校验器对本项目使用的字段保持严格检查；CI 还会读取官方 Plugin 文档的 `Manifest fields` 段，若官方新增了本地严格验证器尚不接受的字段就会失败。该兼容检查每周自动运行，Python 和 GitHub Actions 依赖由 Dependabot 跟踪。
 
 ```bash
 source ./venv/bin/activate
@@ -187,6 +189,7 @@ which pip3
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 agentskills validate skills/construct-subagent
 python3 scripts/validate_plugin.py .
+python3 scripts/check_official_plugin_schema.py
 ```
 
 ## 开发与贡献
