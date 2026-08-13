@@ -55,6 +55,13 @@ priorities = ["cost", "quality"]
 artifact_paths = ["ai_docs/notes/20260813-0000_product-spec.md"]
 constraints = ["Preserve the public contract."]
 
+[cost_profile]
+objective = "minimize_total_cost"
+total_cost_formula = "model_call_cost + coordination_overhead_cost"
+baseline = "single-agent"
+measurement_scope = "per-task"
+metrics = ["agent_invocations", "coordination_overhead_cost", "coordination_tokens", "latency_ms", "model_call_cost", "model_input_tokens", "model_output_tokens", "success_rate", "total_cost"]
+
 [orchestration]
 coordinator = "main"
 topology = "flat"
@@ -77,8 +84,8 @@ id = "strong-model"
 availability_source = "runtime_model_registry"
 capability_tier = "strong"
 cost_tier = "high"
-reasoning_efforts = ["medium", "high"]
-suitable_for = ["complex debugging", "architecture decisions"]
+reasoning_efforts = ["high", "medium"]
+suitable_for = ["architecture decisions", "complex debugging"]
 
 [[agents]]
 name = "code_mapper"
@@ -94,8 +101,8 @@ escalation_triggers = ["Conflicting architecture artifacts"]
 sandbox_mode = "read-only"
 permission_boundaries = ["Read repository files only."]
 skills = []
-tools = ["repository search", "file read"]
-inputs = ["Task Contract", "AGENTS.md"]
+tools = ["file read", "repository search"]
+inputs = ["AGENTS.md", "Task Contract"]
 outputs = ["Evidence map with exact file references"]
 invoke_when = ["Before editing an unfamiliar module"]
 parallel_groups = ["read-analysis"]
@@ -129,8 +136,8 @@ escalation_triggers = ["Conflicting architecture artifacts"]
 sandbox_mode = "read-only"
 permission_boundaries = ["Read repository files only."]
 skills = []
-tools = ["repository search", "file read"]
-inputs = ["Task Contract", "AGENTS.md"]
+tools = ["file read", "repository search"]
+inputs = ["AGENTS.md", "Task Contract"]
 outputs = ["Evidence map with exact file references"]
 invoke_when = ["Before editing an unfamiliar module"]
 parallel_groups = ["read-analysis"]
@@ -184,6 +191,9 @@ class TeamValidatorTests(unittest.TestCase):
             availability_source="runtime_model_registry",
             runtime_sandbox="read-only",
             runtime_approval_policy="on-request",
+            agent_runtime_sandboxes={"code_mapper": "read-only"},
+            agent_runtime_approval_policies={"code_mapper": "on-request"},
+            permission_evidence_source="spawn_session_metadata",
             require_runtime_permissions=True,
             codex_version="codex-cli 0.147.0-alpha.6.5",
             codex_version_source="codex_cli",
@@ -194,7 +204,10 @@ class TeamValidatorTests(unittest.TestCase):
         second = self.validate()
         self.assertEqual(first["status"], "PASS", first["errors"])
         self.assertEqual(first["configuration_status"], "PASS")
-        self.assertEqual(first["runtime_model_availability"]["status"], "VERIFIED")
+        self.assertEqual(
+            first["runtime_model_availability"]["status"],
+            "CALLER_ASSERTED",
+        )
         self.assertEqual(first["runtime_permissions"]["status"], "VERIFIED")
         self.assertEqual(first["runtime_codex_compatibility"]["status"], "VERIFIED")
         self.assertEqual(
@@ -213,7 +226,26 @@ class TeamValidatorTests(unittest.TestCase):
             first["runtime_permissions"]["agents"][0]["comparison_status"],
             "MATCH",
         )
+        self.assertEqual(
+            first["runtime_permissions"]["agents"][0]["observed_effective"],
+            {"sandbox_mode": "read-only", "approval_policy": "on-request"},
+        )
         self.assertEqual(first["fingerprint"], second["fingerprint"])
+
+    def test_successful_model_probe_upgrades_runtime_status(self) -> None:
+        report = TeamValidator(
+            self.root,
+            probed_models={"economy-model", "strong-model"},
+            model_probe_source="successful_model_probe",
+        ).validate()
+        self.assertEqual(
+            report["runtime_model_availability"]["status"],
+            "VERIFIED",
+        )
+        self.assertEqual(
+            report["runtime_model_availability"]["evidence_level"],
+            "successful_model_probe",
+        )
 
     def test_last_changed_at_must_be_rfc3339(self) -> None:
         manifest_path = self.root / ".codex" / "agent-team.toml"
@@ -344,10 +376,8 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(report["status"], "FAIL")
         self.assertEqual(report["configuration_status"], "PASS")
         self.assertEqual(report["runtime_model_availability"]["status"], "UNVERIFIED")
-        self.assertTrue(
-            any("evidence was not supplied" in error for error in report["errors"]),
-            report["errors"],
-        )
+        self.assertTrue(report["runtime_model_availability"]["configuration_usable"])
+        self.assertEqual(report["runtime_model_availability"]["errors"], [])
 
     def test_model_absent_from_runtime_evidence_fails(self) -> None:
         report = TeamValidator(
@@ -359,25 +389,39 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(report["configuration_status"], "PASS")
         self.assertEqual(report["runtime_model_availability"]["status"], "FAIL")
         self.assertEqual(
-            report["runtime_model_availability"]["missing_models"],
+            report["runtime_model_availability"]["catalog"]["missing_models"],
             ["strong-model"],
         )
 
-    def test_manifest_and_external_evidence_sources_must_match(self) -> None:
-        manifest_path = self.root / ".codex" / "agent-team.toml"
-        manifest_path.write_text(
-            MANIFEST_TOML.replace(
-                'availability_source = "runtime_model_registry"',
-                'availability_source = "codex_model_selector"',
-            ),
-            encoding="utf-8",
+    def test_catalog_assertion_is_distinct_from_manifest_provenance(self) -> None:
+        report = TeamValidator(
+            self.root,
+            available_models={"economy-model", "strong-model"},
+            availability_source="codex_model_selector",
+        ).validate()
+        self.assertEqual(report["configuration_status"], "PASS")
+        self.assertEqual(
+            report["runtime_model_availability"]["status"],
+            "CALLER_ASSERTED",
         )
-        report = self.validate()
+        self.assertEqual(
+            report["runtime_model_availability"]["declared_sources"],
+            ["runtime_model_registry"],
+        )
+
+    def test_partial_probe_evidence_fails_without_downgrading_to_asserted(self) -> None:
+        report = TeamValidator(
+            self.root,
+            available_models={"economy-model", "strong-model"},
+            availability_source="runtime_model_registry",
+            probed_models={"economy-model"},
+            model_probe_source="successful_model_probe",
+        ).validate()
         self.assertEqual(report["status"], "FAIL")
         self.assertEqual(report["configuration_status"], "PASS")
         self.assertEqual(report["runtime_model_availability"]["status"], "FAIL")
         self.assertTrue(
-            any("do not match" in error for error in report["errors"]),
+            any("do not all have a successful probe" in error for error in report["errors"]),
             report["errors"],
         )
 
@@ -398,6 +442,12 @@ class TeamValidatorTests(unittest.TestCase):
                 "read-only",
                 "--runtime-approval-policy",
                 "on-request",
+                "--permission-evidence-source",
+                "spawn_session_metadata",
+                "--agent-runtime-sandbox",
+                "code_mapper=read-only",
+                "--agent-runtime-approval-policy",
+                "code_mapper=on-request",
                 "--require-runtime-permissions",
                 "--codex-version",
                 "codex-cli 0.147.0-alpha.6.5",
@@ -412,7 +462,10 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         report = json.loads(result.stdout)
         self.assertEqual(report["configuration_status"], "PASS")
-        self.assertEqual(report["runtime_model_availability"]["status"], "VERIFIED")
+        self.assertEqual(
+            report["runtime_model_availability"]["status"],
+            "CALLER_ASSERTED",
+        )
         self.assertEqual(report["runtime_permissions"]["status"], "VERIFIED")
         self.assertEqual(report["runtime_codex_compatibility"]["status"], "VERIFIED")
 
@@ -423,6 +476,9 @@ class TeamValidatorTests(unittest.TestCase):
             availability_source="runtime_model_registry",
             runtime_sandbox="read-only",
             runtime_approval_policy="on-request",
+            agent_runtime_sandboxes={"code_mapper": "read-only"},
+            agent_runtime_approval_policies={"code_mapper": "on-request"},
+            permission_evidence_source="spawn_session_metadata",
             require_runtime_permissions=True,
         ).validate()
         self.assertEqual(report["status"], "FAIL")
@@ -440,6 +496,9 @@ class TeamValidatorTests(unittest.TestCase):
             availability_source="runtime_model_registry",
             runtime_sandbox="read-only",
             runtime_approval_policy="on-request",
+            agent_runtime_sandboxes={"code_mapper": "read-only"},
+            agent_runtime_approval_policies={"code_mapper": "on-request"},
+            permission_evidence_source="spawn_session_metadata",
             require_runtime_permissions=True,
             codex_version="codex-cli 0.145.0",
             codex_version_source="codex_cli",
@@ -505,20 +564,26 @@ class TeamValidatorTests(unittest.TestCase):
         ).validate()
         self.assertEqual(report["status"], "FAIL")
         self.assertEqual(report["configuration_status"], "PASS")
-        self.assertEqual(report["runtime_model_availability"]["status"], "VERIFIED")
+        self.assertEqual(
+            report["runtime_model_availability"]["status"],
+            "CALLER_ASSERTED",
+        )
         self.assertEqual(report["runtime_permissions"]["status"], "UNVERIFIED")
         self.assertTrue(
-            any("permission evidence was not supplied" in error for error in report["errors"]),
+            any("permission evidence source was not supplied" in error for error in report["errors"]),
             report["errors"],
         )
 
-    def test_parent_runtime_sandbox_override_mismatch_fails(self) -> None:
+    def test_agent_runtime_sandbox_mismatch_fails(self) -> None:
         report = TeamValidator(
             self.root,
             available_models={"economy-model", "strong-model"},
             availability_source="runtime_model_registry",
             runtime_sandbox="workspace-write",
             runtime_approval_policy="on-request",
+            agent_runtime_sandboxes={"code_mapper": "workspace-write"},
+            agent_runtime_approval_policies={"code_mapper": "on-request"},
+            permission_evidence_source="spawn_session_metadata",
             require_runtime_permissions=True,
         ).validate()
         self.assertEqual(report["status"], "FAIL")
@@ -532,6 +597,23 @@ class TeamValidatorTests(unittest.TestCase):
             report["runtime_permissions"]["observed_parent"]["sandbox_mode"],
             "workspace-write",
         )
+
+    def test_parent_permission_context_does_not_force_one_team_sandbox(self) -> None:
+        report = TeamValidator(
+            self.root,
+            available_models={"economy-model", "strong-model"},
+            availability_source="runtime_model_registry",
+            runtime_sandbox="workspace-write",
+            runtime_approval_policy="on-request",
+            agent_runtime_sandboxes={"code_mapper": "read-only"},
+            agent_runtime_approval_policies={"code_mapper": "on-request"},
+            permission_evidence_source="spawn_session_metadata",
+            require_runtime_permissions=True,
+            codex_version="codex-cli 0.147.0",
+            codex_version_source="codex_cli",
+        ).validate()
+        self.assertEqual(report["status"], "PASS", report["errors"])
+        self.assertEqual(report["runtime_permissions"]["status"], "VERIFIED")
 
     def test_behavioral_boundaries_are_reported_as_instruction_only(self) -> None:
         report = self.validate()

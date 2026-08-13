@@ -76,6 +76,13 @@ priorities = ["cost", "quality"]
 artifact_paths = ["ai_docs/notes/20260813-0000_product-spec.md"]
 constraints = ["Do not change public API without main-agent approval."]
 
+[cost_profile]
+objective = "minimize_total_cost"
+total_cost_formula = "model_call_cost + coordination_overhead_cost"
+baseline = "single-agent"
+measurement_scope = "per-task"
+metrics = ["agent_invocations", "coordination_overhead_cost", "coordination_tokens", "latency_ms", "model_call_cost", "model_input_tokens", "model_output_tokens", "success_rate", "total_cost"]
+
 [orchestration]
 coordinator = "main"
 topology = "flat"
@@ -124,6 +131,7 @@ managed = true
 - `status`：验证前可在内存中视为 draft，写入就绪 Manifest 时固定为 `ready`；
 - `last_changed_at`：使用带时区的 RFC 3339 时间戳，只在团队语义变化时更新。KEEP 运行不得改变；
 - `project`：Project Execution Profile；
+- `cost_profile`：相对单 Agent 基线衡量总费用、Token、调用次数、延迟和成功率；
 - `orchestration`：中央协调、并发、失败流和串并行约束；
 - `model_registry.models`：本次设计实际引用的模型及其可用性证据；
 - `agents`：活动的受管 Subagent。主 Agent 不在这里重复定义。
@@ -148,11 +156,18 @@ managed = true
 
 - `runtime_model_registry`：当前 Agent 工具或宿主运行时直接公开的可选模型集合；
 - `codex_model_selector`：当前已认证 Codex 客户端模型选择器实际列出的模型；
+- `project_model_allowlist`：项目受管配置明确允许的模型，仅证明配置来源；
 - `successful_model_probe`：当前会话中对该模型的最小真实调用已经成功。
+- `user_declared_allowlist`：用户在当前任务中明确允许的模型，仅证明配置来源。
 
-任意说明文字、公开模型文档、用户猜测、静态默认值或只存在于 Manifest 内的声明都不构成当前可用性证据。`model_catalog_json` 只有在当前 Codex 运行时已经加载并将其中模型公开为可选模型时，才能归入 `runtime_model_registry`；单独读取该文件不够。
+受控来源让 Model Registry 可审查，但不自动证明当前账户能够真实调用模型。任意说明文字、公开模型文档、用户猜测或只存在于 Manifest 内的自由文本都不能充当来源。`model_catalog_json` 只有在当前 Codex 运行时已经加载并将其中模型公开为可选模型时，才能归入 `runtime_model_registry`；单独读取该文件只能作为 `project_model_allowlist`。
 
-验证时必须从上述来源取得一个独立模型集合，并通过重复的 `--available-model` 参数传入验证器；同时用 `--availability-source` 指明该集合的来源。验证器会比较外部集合、Manifest 中的 `availability_source` 以及所有默认和升级模型。Manifest 不能用自己的 `availability_source` 文字为自己作证。
+运行时证据分成两层：
+
+- `--availability-source` 与重复的 `--available-model` 表示调用者从当前 runtime registry 或 model selector 观察到的模型集合，报告为 `CALLER_ASSERTED`；它比 Manifest 自述更强，但验证器不能证明调用者没有伪造参数；
+- `--model-probe-source successful_model_probe` 与重复的 `--probed-model` 表示本次运行已成功真实调用的模型集合，只有覆盖全部必需模型时报告为 `VERIFIED`。
+
+没有外部模型证据时报告 `UNVERIFIED`，但只要 Model Registry、Agent 分配和 reasoning effort 配置有效，团队配置仍可使用。若调用者主动提供了目录或探测证据，但其中缺少必需模型，则报告 `FAIL` 并阻止就绪状态。真实探测是增强证据，不是生成配置的强制前提。
 
 `capability_tier` 使用 `strong`、`balanced` 或 `throughput`；`cost_tier` 使用 `high`、`medium` 或 `low`。这是相对成本画像，不是精确价格。
 
@@ -160,24 +175,37 @@ Agent 的默认与升级模型必须都在 registry 中，且 reasoning effort �
 
 升级配置必须严格强于默认配置。验证器先按 `throughput < balanced < strong` 比较 `capability_tier`，能力层相同时再按 `minimal < low < medium < high < xhigh < max < ultra` 比较 reasoning effort。升级配置的二元排序必须严格更大；同一模型提高 effort 可以构成升级，同级或更弱配置不能构成升级。`suitable_for` 仍是可审查的任务适配说明，不单独作为强弱证明。
 
-### 3.4 Runtime Permission Evidence
+### 3.4 Cost Profile
 
-父线程当前生效的权限是会话事实，不写入稳定 Manifest，也不参与 `last_changed_at` 或文件 fingerprint。完成验证时必须从当前父线程上下文读取并传入：
+多 Agent 通常比同类单 Agent 运行消耗更多 Token，因此“使用低价模型”不等于总 Token 或总费用一定下降。`cost_profile` 固定使用：
 
-- `--runtime-sandbox`：父线程当前生效的 sandbox；
-- `--runtime-approval-policy`：父线程当前生效的 approval policy；
-- `--require-runtime-permissions`：要求缺失证据或 sandbox 不一致时阻止就绪状态。
+- `objective = "minimize_total_cost"`；
+- `total_cost_formula = "model_call_cost + coordination_overhead_cost"`；
+- `baseline = "single-agent"` 与 `measurement_scope = "per-task"`；
+- `metrics` 同时记录模型输入/输出 Token、协调 Token、Agent 调用次数、模型费用、协调费用、总费用、端到端延迟和任务成功率。
 
-验证器逐 Agent 比较 `sandbox_mode` 配置默认值与父线程实时 sandbox。完全一致时为 `MATCH`；不一致时为 `MISMATCH`，因为父线程的实时 override 可能决定 spawned Agent 的最终 sandbox。approval policy 当前只作为父线程实时权限证据单独报告，不从提示词或 Manifest 推断。
+只有相对单 Agent 基线的总费用、延迟和成功率同时可接受时，才能声称成本路由有效。不要把更低的单模型价格或某个 Agent 的 Token 降幅直接表述为整体节省。
+
+### 3.5 Runtime Permission Evidence
+
+权限是会话事实，不写入稳定 Manifest，也不参与 `last_changed_at` 或文件 fingerprint。完成验证时必须为每个 Agent 从可信宿主或 spawn session metadata 读取并传入：
+
+- `--permission-evidence-source host_runtime|spawn_session_metadata`：证据来源；
+- `--agent-runtime-sandbox <agent>=<mode>`：该 Agent 实际生效的 sandbox；
+- `--agent-runtime-approval-policy <agent>=<policy>`：该 Agent 实际生效的 approval policy；
+- `--require-runtime-permissions`：要求每个 Agent 的证据完整且实际 sandbox 与其配置默认值一致。
+
+`--runtime-sandbox` 和 `--runtime-approval-policy` 可继续记录父线程上下文，但不再拿一个父线程 sandbox 与所有 Agent 默认值逐一强制相等。验证器逐 Agent 比较自己的 `sandbox_mode` 配置默认值与该 Agent 的实际有效 sandbox，因此同一团队可以安全地同时包含 `read-only` 和 `workspace-write` Agent。缺失为 `UNVERIFIED`，不一致为 `MISMATCH`，完全一致为 `MATCH`。
 
 运行时权限报告必须区分：
 
 - `configured_sandbox_default`：Agent 文件与 Manifest 自洽的配置默认值；
-- `observed_parent`：本次父线程实际观察到的 sandbox 与 approval policy；
+- `observed_effective`：该 Agent 本次实际生效的 sandbox 与 approval policy；
+- `observed_parent`：可选的父线程 sandbox 与 approval policy 上下文；
 - `comparison_status`：每个 Agent 的 `MATCH`、`MISMATCH` 或 `UNVERIFIED`；
 - `behavioral_boundary_enforcement`：固定为 `developer_instructions_only`，明确行为边界不等于技术权限。
 
-### 3.5 Runtime Codex Compatibility Evidence
+### 3.6 Runtime Codex Compatibility Evidence
 
 Codex 自定义 Agent 是原生运行时配置，格式可能随 Codex 演进。目标团队文件只能在本 Skill 已审查的兼容窗口内生成或宣布就绪：
 
@@ -249,7 +277,7 @@ max_concurrent_threads_per_session = 3
 - 无关文件修改；
 - 数组或 TOML 表的非语义性重排。
 
-构造期望状态时使用稳定排序：模型按 `id` 严格升序，Agent 按 `name` 严格升序，集合型字符串数组按字典序；有执行顺序语义的 `failure_flow`、`parallel_policy` 和 `serial_policy` 保持逻辑顺序。每个活动 Agent 必须引用唯一的 `.codex/agents/*.toml` 文件，不能由多个 Manifest Agent 共用同一文件。`project.artifact_paths` 的每一项必须指向项目根内已存在的普通文件，不能只指向目录。
+构造期望状态时使用稳定排序：模型按 `id` 严格升序，Agent 按 `name` 严格升序，集合型字符串数组按字典序且不得重复；有执行顺序语义的 `failure_flow`、`parallel_policy` 和 `serial_policy` 保持逻辑顺序。`serializes_with` 只能引用存在的其他 Agent，不能引用自己，并且关系必须对称。每个活动 Agent 必须引用唯一的 `.codex/agents/*.toml` 文件，不能由多个 Manifest Agent 共用同一文件。`project.artifact_paths` 的每一项必须指向项目根内已存在的普通文件，不能只指向目录。
 
 写入前比较完整目标字节。相同则不执行写操作。语义变化时统一更新 Manifest 的 `last_changed_at`，否则保留原值。
 
@@ -261,9 +289,10 @@ max_concurrent_threads_per_session = 3
 - Project Execution Profile 完整；
 - 最小充分角色和不可合并理由已经审查；
 - 所有 Agent 的职责、边界、模型、权限、Skill、输入、输出和升级完整；
-- 默认和升级模型均有当前可用性证据；
+- 默认和升级模型均有有效的受控配置来源；真实模型探测作为增强证据单独报告；
+- Cost Profile 包含总费用公式以及 Token、调用次数、延迟和成功率指标；
 - 当前 Codex 版本有独立来源，且运行时兼容性状态为 `VERIFIED`；
-- 父线程实时 sandbox 和 approval policy 已独立观察，且 sandbox 与所有 Agent 配置默认值一致；
+- 每个 Agent 的实际 sandbox 和 approval policy 已从可信来源独立观察，且实际 sandbox 与该 Agent 配置默认值一致；
 - 中央协调、失败流和串并行规则完整；
 - 活动受管 Agent 无重复、无孤儿、无名称冲突；
 - Manifest 的时间戳、模型/Agent 排序、Agent 文件唯一性、Artifact 文件类型和升级强度均符合本契约；
@@ -281,17 +310,28 @@ python3 scripts/validate_team.py \
   --available-model <verified-escalation-model> \
   --runtime-sandbox <observed-parent-sandbox> \
   --runtime-approval-policy <observed-parent-approval-policy> \
+  --permission-evidence-source spawn_session_metadata \
+  --agent-runtime-sandbox <agent-name>=<observed-effective-sandbox> \
+  --agent-runtime-approval-policy <agent-name>=<observed-effective-policy> \
   --require-runtime-permissions \
   --codex-version <observed-codex-version> \
   --codex-version-source codex_cli
 ```
 
+每个 Agent 都要重复一组 `--agent-runtime-sandbox` 与 `--agent-runtime-approval-policy`。若本次还完成了真实模型调用，可额外传入：
+
+```bash
+  --model-probe-source successful_model_probe \
+  --probed-model <probed-default-model> \
+  --probed-model <probed-escalation-model>
+```
+
 验证报告同时包含：
 
 - `configuration_status`：Manifest、Agent、项目配置和文件所有权是否自洽；
-- `runtime_model_availability.status`：`VERIFIED`、`UNVERIFIED` 或 `FAIL`；
+- `runtime_model_availability.status`：`VERIFIED`、`CALLER_ASSERTED`、`UNVERIFIED` 或 `FAIL`；
 - `runtime_permissions.status`：`VERIFIED`、`UNVERIFIED` 或 `MISMATCH`；
 - `runtime_codex_compatibility.status`：`VERIFIED`、`UNVERIFIED`、`UNSUPPORTED_OLD` 或 `UNREVIEWED_NEWER`；
-- 顶层 `status`：只有配置通过、运行时模型状态、严格模式下运行时权限状态和 Codex 兼容性状态均为 `VERIFIED` 时才为 `PASS`。
+- 顶层 `status`：配置必须通过；主动提供但矛盾的模型证据不得为 `FAIL`；严格模式下运行时权限和 Codex 兼容性必须为 `VERIFIED`。模型真实探测不是顶层 `PASS` 的强制条件。
 
-`configuration_status = PASS` 不能单独支持 `AGENT_TEAM_READY`。缺少外部模型集合时，即使其他配置完全自洽，顶层状态仍必须为 `FAIL`，并报告运行时模型可用性为 `UNVERIFIED`。完成 Gate 必须使用 `--require-runtime-permissions`；缺少父线程权限证据时报告 `UNVERIFIED`，配置默认 sandbox 与父线程实时 sandbox 不一致时报告 `MISMATCH`，两者都不得宣布团队就绪。Codex 版本证据缺失、过旧或高于已审查系列时同样保持顶层 `FAIL`，且不得先写目标团队文件再补做兼容性判断。
+`configuration_status = PASS` 表示团队配置可以使用，但不能据此声称模型已经真实调用成功。没有外部模型证据时报告 `UNVERIFIED`；目录证据完整时为 `CALLER_ASSERTED`；只有真实探测覆盖全部必需模型时为 `VERIFIED`。完成 Gate 必须使用 `--require-runtime-permissions`；任一 Agent 缺少实际权限证据时报告 `UNVERIFIED`，实际 sandbox 与自身配置默认值不一致时报告 `MISMATCH`，两者都不得宣布团队就绪。Codex 版本证据缺失、过旧或高于已审查系列时同样保持顶层 `FAIL`，且不得先写目标团队文件再补做兼容性判断。

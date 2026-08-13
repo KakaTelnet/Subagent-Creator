@@ -28,8 +28,16 @@ VALID_SANDBOXES = {"read-only", "workspace-write", "danger-full-access"}
 VALID_AVAILABILITY_SOURCES = {
     "runtime_model_registry",
     "codex_model_selector",
+    "project_model_allowlist",
     "successful_model_probe",
+    "user_declared_allowlist",
 }
+VALID_MODEL_CATALOG_SOURCES = {
+    "runtime_model_registry",
+    "codex_model_selector",
+}
+VALID_MODEL_PROBE_SOURCES = {"successful_model_probe"}
+VALID_PERMISSION_EVIDENCE_SOURCES = {"host_runtime", "spawn_session_metadata"}
 VALID_CODEX_VERSION_SOURCES = {"codex_cli", "host_runtime"}
 MINIMUM_CODEX_VERSION = (0, 145, 0)
 MAXIMUM_REVIEWED_CODEX_SERIES = (0, 147)
@@ -55,6 +63,17 @@ EFFORT_RANK = {
     "xhigh": 4,
     "max": 5,
     "ultra": 6,
+}
+REQUIRED_COST_METRICS = {
+    "agent_invocations",
+    "coordination_overhead_cost",
+    "coordination_tokens",
+    "latency_ms",
+    "model_call_cost",
+    "model_input_tokens",
+    "model_output_tokens",
+    "success_rate",
+    "total_cost",
 }
 
 
@@ -90,8 +109,13 @@ class TeamValidator:
         *,
         available_models: set[str] | None = None,
         availability_source: str | None = None,
+        probed_models: set[str] | None = None,
+        model_probe_source: str | None = None,
         runtime_sandbox: str | None = None,
         runtime_approval_policy: str | None = None,
+        agent_runtime_sandboxes: dict[str, str] | None = None,
+        agent_runtime_approval_policies: dict[str, str] | None = None,
+        permission_evidence_source: str | None = None,
         require_runtime_permissions: bool = False,
         codex_version: str | None = None,
         codex_version_source: str | None = None,
@@ -104,8 +128,13 @@ class TeamValidator:
         self.checked_files: set[Path] = set()
         self.available_models = available_models
         self.availability_source = availability_source
+        self.probed_models = probed_models
+        self.model_probe_source = model_probe_source
         self.runtime_sandbox = runtime_sandbox
         self.runtime_approval_policy = runtime_approval_policy
+        self.agent_runtime_sandboxes = agent_runtime_sandboxes
+        self.agent_runtime_approval_policies = agent_runtime_approval_policies
+        self.permission_evidence_source = permission_evidence_source
         self.require_runtime_permissions = require_runtime_permissions
         self.codex_version = codex_version
         self.codex_version_source = codex_version_source
@@ -173,6 +202,25 @@ class TeamValidator:
             self.error(f"{context}.{key} must not be empty")
         return value
 
+    def require_sorted_unique_string_list(
+        self,
+        table: dict[str, Any],
+        key: str,
+        context: str,
+        *,
+        allow_empty: bool = False,
+    ) -> list[str] | None:
+        """Return a set-semantic string list in stable canonical order."""
+        value = self.require_string_list(
+            table,
+            key,
+            context,
+            allow_empty=allow_empty,
+        )
+        if value is not None and value != sorted(set(value)):
+            self.error(f"{context}.{key} must be sorted and contain no duplicates")
+        return value
+
     def validate_rfc3339_timestamp(
         self,
         table: dict[str, Any],
@@ -219,7 +267,11 @@ class TeamValidator:
             self.error("manifest.project.size must be small, medium, large, or very-large")
         self.require_string(project, "summary", "manifest.project")
         for key in ("complexity", "task_types", "risks", "priorities", "artifact_paths", "constraints"):
-            values = self.require_string_list(project, key, "manifest.project")
+            values = self.require_sorted_unique_string_list(
+                project,
+                key,
+                "manifest.project",
+            )
             if key == "artifact_paths" and values:
                 for index, raw_path in enumerate(values):
                     path = self.resolve_project_path(raw_path, f"manifest.project.artifact_paths[{index}]")
@@ -227,6 +279,48 @@ class TeamValidator:
                         self.error(f"project artifact does not exist: {raw_path}")
                     elif path is not None and not path.is_file():
                         self.error(f"project artifact must be a file: {raw_path}")
+
+    def validate_cost_profile(self, manifest: dict[str, Any]) -> None:
+        """Validate measurable cost, token, latency, and success objectives."""
+        profile = manifest.get("cost_profile")
+        if not isinstance(profile, dict):
+            self.error("manifest.cost_profile must be a TOML table")
+            return
+        objective = self.require_string(profile, "objective", "manifest.cost_profile")
+        if objective and objective != "minimize_total_cost":
+            self.error("manifest.cost_profile.objective must be 'minimize_total_cost'")
+        formula = self.require_string(
+            profile,
+            "total_cost_formula",
+            "manifest.cost_profile",
+        )
+        if formula and formula != "model_call_cost + coordination_overhead_cost":
+            self.error(
+                "manifest.cost_profile.total_cost_formula must be "
+                "'model_call_cost + coordination_overhead_cost'"
+            )
+        baseline = self.require_string(profile, "baseline", "manifest.cost_profile")
+        if baseline and baseline != "single-agent":
+            self.error("manifest.cost_profile.baseline must be 'single-agent'")
+        scope = self.require_string(
+            profile,
+            "measurement_scope",
+            "manifest.cost_profile",
+        )
+        if scope and scope != "per-task":
+            self.error("manifest.cost_profile.measurement_scope must be 'per-task'")
+        metrics = self.require_sorted_unique_string_list(
+            profile,
+            "metrics",
+            "manifest.cost_profile",
+        )
+        if metrics is not None and set(metrics) != REQUIRED_COST_METRICS:
+            missing = sorted(REQUIRED_COST_METRICS - set(metrics))
+            extra = sorted(set(metrics) - REQUIRED_COST_METRICS)
+            self.error(
+                "manifest.cost_profile.metrics must contain the required measurement set; "
+                f"missing={missing}, extra={extra}"
+            )
 
     def validate_orchestration(self, manifest: dict[str, Any]) -> int | None:
         """Validate centralized coordination and return the concurrency cap."""
@@ -268,8 +362,12 @@ class TeamValidator:
             availability_source = self.require_string(model, "availability_source", context)
             capability = self.require_string(model, "capability_tier", context)
             cost = self.require_string(model, "cost_tier", context)
-            efforts = self.require_string_list(model, "reasoning_efforts", context)
-            self.require_string_list(model, "suitable_for", context)
+            efforts = self.require_sorted_unique_string_list(
+                model,
+                "reasoning_efforts",
+                context,
+            )
+            self.require_sorted_unique_string_list(model, "suitable_for", context)
             if capability and capability not in VALID_CAPABILITY_TIERS:
                 self.error(f"{context}.capability_tier is invalid: {capability}")
             if cost and cost not in VALID_COST_TIERS:
@@ -298,107 +396,183 @@ class TeamValidator:
         return result
 
     def validate_runtime_model_availability(self) -> dict[str, Any]:
-        """Compare required models with evidence supplied by the current runtime."""
+        """Report configuration, catalog assertions, and successful probes separately."""
         available = self.available_models
         source = self.availability_source
-        missing = sorted(self.required_models - available) if available is not None else []
-        status = "VERIFIED"
+        probed = self.probed_models
+        probe_source = self.model_probe_source
+        missing_catalog = (
+            sorted(self.required_models - available) if available is not None else []
+        )
+        missing_probes = (
+            sorted(self.required_models - probed) if probed is not None else []
+        )
+        status = "UNVERIFIED"
+        evidence_level = "configuration_only"
 
-        if available is None or source is None:
-            status = "UNVERIFIED"
-            self.availability_error(
-                "runtime model availability evidence was not supplied; pass "
-                "--availability-source and at least one --available-model from the "
-                "current Codex runtime or model selector"
-            )
-        elif source not in VALID_AVAILABILITY_SOURCES:
-            status = "FAIL"
-            self.availability_error(
-                f"runtime availability source must be one of "
-                f"{sorted(VALID_AVAILABILITY_SOURCES)}, got: {source}"
-            )
-        elif not available:
-            status = "FAIL"
-            self.availability_error("runtime availability evidence contains no models")
-        else:
-            if self.manifest_availability_sources != {source}:
+        catalog_partially_supplied = available is not None or source is not None
+        if catalog_partially_supplied:
+            if available is None or source is None:
                 status = "FAIL"
                 self.availability_error(
-                    "Manifest availability_source values do not match the external "
-                    f"runtime evidence source {source}: "
-                    f"{sorted(self.manifest_availability_sources)}"
+                    "runtime catalog evidence requires both --availability-source and "
+                    "at least one --available-model"
                 )
-            if missing:
+            elif source not in VALID_MODEL_CATALOG_SOURCES:
                 status = "FAIL"
                 self.availability_error(
-                    f"models required by the Manifest are absent from current runtime "
-                    f"evidence: {missing}"
+                    f"runtime catalog source must be one of "
+                    f"{sorted(VALID_MODEL_CATALOG_SOURCES)}, got: {source}"
                 )
+            elif not available:
+                status = "FAIL"
+                self.availability_error("runtime catalog assertion contains no models")
+            elif missing_catalog:
+                status = "FAIL"
+                self.availability_error(
+                    "models required by the Manifest are absent from the supplied "
+                    f"runtime catalog assertion: {missing_catalog}"
+                )
+            else:
+                status = "CALLER_ASSERTED"
+                evidence_level = "runtime_catalog_assertion"
+
+        probe_partially_supplied = probed is not None or probe_source is not None
+        if probe_partially_supplied:
+            if probed is None or probe_source is None:
+                status = "FAIL"
+                self.availability_error(
+                    "successful model probe evidence requires both --model-probe-source "
+                    "and at least one --probed-model"
+                )
+            elif probe_source not in VALID_MODEL_PROBE_SOURCES:
+                status = "FAIL"
+                self.availability_error(
+                    f"model probe source must be one of "
+                    f"{sorted(VALID_MODEL_PROBE_SOURCES)}, got: {probe_source}"
+                )
+            elif not probed:
+                status = "FAIL"
+                self.availability_error("successful model probe evidence contains no models")
+            elif missing_probes:
+                status = "FAIL"
+                self.availability_error(
+                    "models required by the Manifest do not all have a successful probe: "
+                    f"{missing_probes}"
+                )
+            elif status != "FAIL":
+                status = "VERIFIED"
+                evidence_level = "successful_model_probe"
 
         return {
             "status": status,
-            "source": source,
+            "evidence_level": evidence_level,
+            "configuration_usable": not self.errors,
+            "declared_sources": sorted(self.manifest_availability_sources),
+            "catalog": {
+                "source": source,
+                "available_models": sorted(available) if available is not None else [],
+                "missing_models": missing_catalog,
+            },
+            "probe": {
+                "source": probe_source,
+                "probed_models": sorted(probed) if probed is not None else [],
+                "missing_models": missing_probes,
+            },
             "required_models": sorted(self.required_models),
-            "available_models": sorted(available) if available is not None else [],
-            "missing_models": missing,
             "errors": list(self.availability_errors),
         }
 
     def validate_runtime_permissions(self) -> dict[str, Any]:
-        """Compare configured sandbox defaults with the observed parent runtime.
-
-        Codex reapplies the parent's live sandbox and approval overrides when a
-        subagent is spawned. The custom Agent file therefore expresses a
-        configured default, not an unconditional effective permission grant.
-        """
-        sandbox = self.runtime_sandbox
-        approval_policy = self.runtime_approval_policy
-        evidence_supplied = sandbox is not None and approval_policy is not None
+        """Validate each Agent's observed effective permissions independently."""
+        parent_sandbox = self.runtime_sandbox
+        parent_approval_policy = self.runtime_approval_policy
+        sandboxes = self.agent_runtime_sandboxes or {}
+        approval_policies = self.agent_runtime_approval_policies or {}
+        evidence_source = self.permission_evidence_source
+        configured_names = {
+            configured["name"] for configured in self.configured_agent_permissions
+        }
+        evidence_names = set(sandboxes) | set(approval_policies)
         status = "VERIFIED"
 
-        if not evidence_supplied:
+        if evidence_source is None:
             status = "UNVERIFIED"
             if self.require_runtime_permissions:
                 self.runtime_permission_error(
-                    "parent runtime permission evidence was not supplied; pass "
-                    "--runtime-sandbox and --runtime-approval-policy from the "
-                    "current parent session"
+                    "per-Agent runtime permission evidence source was not supplied; pass "
+                    "--permission-evidence-source using trusted host or spawn metadata"
                 )
-        elif sandbox not in VALID_SANDBOXES:
+        elif evidence_source not in VALID_PERMISSION_EVIDENCE_SOURCES:
             status = "MISMATCH"
             self.runtime_permission_error(
-                f"parent runtime sandbox must be one of {sorted(VALID_SANDBOXES)}, "
-                f"got: {sandbox}"
+                f"permission evidence source must be one of "
+                f"{sorted(VALID_PERMISSION_EVIDENCE_SOURCES)}, got: {evidence_source}"
             )
-        elif not approval_policy.strip():
-            status = "UNVERIFIED"
-            if self.require_runtime_permissions:
-                self.runtime_permission_error(
-                    "parent runtime approval policy must be a non-empty observed value"
-                )
+
+        unexpected_names = sorted(evidence_names - configured_names)
+        if unexpected_names:
+            status = "MISMATCH"
+            self.runtime_permission_error(
+                f"runtime permission evidence references unknown Agents: {unexpected_names}"
+            )
 
         agents: list[dict[str, Any]] = []
         for configured in self.configured_agent_permissions:
+            name = configured["name"]
             configured_sandbox = configured["configured_sandbox_default"]
+            observed_sandbox = sandboxes.get(name)
+            observed_approval_policy = approval_policies.get(name)
             comparison_status = "UNVERIFIED"
-            if sandbox in VALID_SANDBOXES:
-                comparison_status = "MATCH" if sandbox == configured_sandbox else "MISMATCH"
-                if comparison_status == "MISMATCH":
-                    status = "MISMATCH"
+
+            if observed_sandbox is None or not observed_approval_policy:
+                if status != "MISMATCH":
+                    status = "UNVERIFIED"
+                if self.require_runtime_permissions:
+                    missing_fields = []
+                    if observed_sandbox is None:
+                        missing_fields.append("sandbox")
+                    if not observed_approval_policy:
+                        missing_fields.append("approval_policy")
                     self.runtime_permission_error(
-                        f"Agent {configured['name']} configured sandbox default "
-                        f"{configured_sandbox} does not match observed parent runtime "
-                        f"sandbox {sandbox}; the parent live override may determine the "
-                        "spawned Agent's effective sandbox"
+                        f"Agent {name} is missing observed effective runtime permission "
+                        f"evidence for: {', '.join(missing_fields)}"
                     )
-            agents.append({**configured, "comparison_status": comparison_status})
+            elif observed_sandbox not in VALID_SANDBOXES:
+                comparison_status = "MISMATCH"
+                status = "MISMATCH"
+                self.runtime_permission_error(
+                    f"Agent {name} observed sandbox must be one of "
+                    f"{sorted(VALID_SANDBOXES)}, got: {observed_sandbox}"
+                )
+            elif observed_sandbox != configured_sandbox:
+                comparison_status = "MISMATCH"
+                status = "MISMATCH"
+                self.runtime_permission_error(
+                    f"Agent {name} configured sandbox default {configured_sandbox} does "
+                    f"not match its observed effective sandbox {observed_sandbox}"
+                )
+            else:
+                comparison_status = "MATCH"
+
+            agents.append(
+                {
+                    **configured,
+                    "observed_effective": {
+                        "sandbox_mode": observed_sandbox,
+                        "approval_policy": observed_approval_policy,
+                    },
+                    "comparison_status": comparison_status,
+                }
+            )
 
         return {
             "status": status,
             "required": self.require_runtime_permissions,
+            "evidence_source": evidence_source,
             "observed_parent": {
-                "sandbox_mode": sandbox,
-                "approval_policy": approval_policy,
+                "sandbox_mode": parent_sandbox,
+                "approval_policy": parent_approval_policy,
             },
             "agents": agents,
             "behavioral_boundary_enforcement": "developer_instructions_only",
@@ -538,6 +712,7 @@ class TeamValidator:
         names: set[str] = set()
         active_paths: set[Path] = set()
         agent_order: list[str] = []
+        serializes_with_by_agent: dict[str, list[str]] = {}
         for index, agent in enumerate(agents):
             context = f"manifest.agents[{index}]"
             if not isinstance(agent, dict):
@@ -557,9 +732,20 @@ class TeamValidator:
                 "invoke_when",
                 "parallel_groups",
             ):
-                required_lists[key] = self.require_string_list(agent, key, context)
+                required_lists[key] = self.require_sorted_unique_string_list(
+                    agent,
+                    key,
+                    context,
+                )
             for key in ("skills", "tools", "serializes_with"):
-                self.require_string_list(agent, key, context, allow_empty=True)
+                values = self.require_sorted_unique_string_list(
+                    agent,
+                    key,
+                    context,
+                    allow_empty=True,
+                )
+                if key == "serializes_with" and name and values is not None:
+                    serializes_with_by_agent[name] = values
             if name:
                 agent_order.append(name)
                 if not NAME_PATTERN.fullmatch(name):
@@ -625,6 +811,20 @@ class TeamValidator:
                         self.validate_agent_file(agent, context, path, skills)
         if agent_order != sorted(agent_order):
             self.error("manifest.agents must be sorted by name")
+        for name, related_agents in serializes_with_by_agent.items():
+            for related_name in related_agents:
+                if related_name == name:
+                    self.error(f"Agent {name} cannot serialize with itself")
+                elif related_name not in names:
+                    self.error(
+                        f"Agent {name} serializes_with references an unknown Agent: "
+                        f"{related_name}"
+                    )
+                elif name not in serializes_with_by_agent.get(related_name, []):
+                    self.error(
+                        f"Agent serialization must be symmetric: {name} -> "
+                        f"{related_name} is missing {related_name} -> {name}"
+                    )
         agents_dir = self.root / ".codex" / "agents"
         if agents_dir.is_dir():
             for path in agents_dir.glob("*.toml"):
@@ -730,6 +930,7 @@ class TeamValidator:
                 self.error("manifest.status must be 'ready'")
             self.validate_rfc3339_timestamp(manifest, "last_changed_at", "manifest")
             self.validate_project(manifest)
+            self.validate_cost_profile(manifest)
             concurrency = self.validate_orchestration(manifest)
             models = self.validate_models(manifest)
             self.validate_agents(manifest, models)
@@ -773,13 +974,39 @@ class TeamValidator:
         return digest.hexdigest()
 
 
+def parse_named_runtime_value(raw_value: str) -> tuple[str, str]:
+    """Parse a repeated ``AGENT=VALUE`` runtime-evidence argument."""
+    name, separator, value = raw_value.partition("=")
+    if not separator or not NAME_PATTERN.fullmatch(name) or not value.strip():
+        raise argparse.ArgumentTypeError(
+            "expected AGENT=VALUE with a valid configured Agent name"
+        )
+    return name, value.strip()
+
+
+def assignments_to_dict(
+    parser: argparse.ArgumentParser,
+    values: list[tuple[str, str]] | None,
+    option: str,
+) -> dict[str, str] | None:
+    """Convert repeated named evidence to a mapping and reject duplicates."""
+    if values is None:
+        return None
+    result: dict[str, str] = {}
+    for name, value in values:
+        if name in result:
+            parser.error(f"{option} was supplied more than once for Agent {name}")
+        result[name] = value
+    return result
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="Target Codex project root")
     parser.add_argument(
         "--availability-source",
-        choices=sorted(VALID_AVAILABILITY_SOURCES),
+        choices=sorted(VALID_MODEL_CATALOG_SOURCES),
         help="Independent source that exposed the current runtime's available models",
     )
     parser.add_argument(
@@ -789,18 +1016,50 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Model id exposed by that source; repeat once per available model",
     )
     parser.add_argument(
+        "--model-probe-source",
+        choices=sorted(VALID_MODEL_PROBE_SOURCES),
+        help="Trusted source for models successfully invoked during this run",
+    )
+    parser.add_argument(
+        "--probed-model",
+        action="append",
+        dest="probed_models",
+        help="Model id with a successful real invocation; repeat once per model",
+    )
+    parser.add_argument(
         "--runtime-sandbox",
         choices=sorted(VALID_SANDBOXES),
-        help="Sandbox mode observed on the current parent session",
+        help="Sandbox mode observed on the parent session, reported as context only",
     )
     parser.add_argument(
         "--runtime-approval-policy",
-        help="Approval policy observed on the current parent session",
+        help="Approval policy observed on the parent session, reported as context only",
+    )
+    parser.add_argument(
+        "--permission-evidence-source",
+        choices=sorted(VALID_PERMISSION_EVIDENCE_SOURCES),
+        help="Trusted source for per-Agent effective permission evidence",
+    )
+    parser.add_argument(
+        "--agent-runtime-sandbox",
+        action="append",
+        type=parse_named_runtime_value,
+        dest="agent_runtime_sandboxes",
+        metavar="AGENT=MODE",
+        help="Observed effective sandbox for one Agent; repeat once per Agent",
+    )
+    parser.add_argument(
+        "--agent-runtime-approval-policy",
+        action="append",
+        type=parse_named_runtime_value,
+        dest="agent_runtime_approval_policies",
+        metavar="AGENT=POLICY",
+        help="Observed effective approval policy for one Agent; repeat once per Agent",
     )
     parser.add_argument(
         "--require-runtime-permissions",
         action="store_true",
-        help="Fail unless parent runtime permission evidence is supplied and matches",
+        help="Fail unless every Agent has matching effective permission evidence",
     )
     parser.add_argument(
         "--codex-version",
@@ -812,7 +1071,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Independent source that exposed the current Codex runtime version",
     )
     parser.add_argument("--json", action="store_true", help="Emit the validation report as JSON")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.agent_runtime_sandboxes = assignments_to_dict(
+        parser,
+        args.agent_runtime_sandboxes,
+        "--agent-runtime-sandbox",
+    )
+    args.agent_runtime_approval_policies = assignments_to_dict(
+        parser,
+        args.agent_runtime_approval_policies,
+        "--agent-runtime-approval-policy",
+    )
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -823,8 +1093,15 @@ def main(argv: list[str] | None = None) -> int:
         args.root,
         available_models=available_models,
         availability_source=args.availability_source,
+        probed_models=(
+            set(args.probed_models) if args.probed_models is not None else None
+        ),
+        model_probe_source=args.model_probe_source,
         runtime_sandbox=args.runtime_sandbox,
         runtime_approval_policy=args.runtime_approval_policy,
+        agent_runtime_sandboxes=args.agent_runtime_sandboxes,
+        agent_runtime_approval_policies=args.agent_runtime_approval_policies,
+        permission_evidence_source=args.permission_evidence_source,
         require_runtime_permissions=args.require_runtime_permissions,
         codex_version=args.codex_version,
         codex_version_source=args.codex_version_source,
