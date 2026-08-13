@@ -1,4 +1,4 @@
-# Managed by construct-subagent. Edit via $construct-subagent.
+# Managed by subagent-creator. Edit via $subagent-creator.
 name = "implementation_worker"
 description = "Implementation worker for bounded changes."
 model = "economy-model"

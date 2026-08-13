@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SKILL_ROOT = PROJECT_ROOT / "skills" / "construct-subagent"
+SKILL_ROOT = PROJECT_ROOT / "skills" / "subagent-creator"
 
 
 class RepositoryLayoutTests(unittest.TestCase):
@@ -25,9 +25,53 @@ class RepositoryLayoutTests(unittest.TestCase):
     def test_plugin_manifest_points_to_skill_directory(self) -> None:
         manifest_path = PROJECT_ROOT / ".codex-plugin" / "plugin.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["name"], "construct-subagent")
+        self.assertEqual(manifest["name"], "subagent-creator")
         self.assertEqual(manifest["skills"], "./skills/")
         self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+$")
+        self.assertEqual(
+            manifest["author"],
+            {
+                "name": "KakaTelnet",
+                "email": "kakatelnet@gmail.com",
+                "url": "https://github.com/KakaTelnet",
+            },
+        )
+        self.assertEqual(
+            manifest["repository"],
+            "https://github.com/KakaTelnet/Subagent-Creator",
+        )
+        self.assertEqual(manifest["interface"]["capabilities"], ["Read", "Write"])
+
+    def test_public_marketplace_installs_the_root_plugin(self) -> None:
+        marketplace_path = PROJECT_ROOT / ".agents" / "plugins" / "marketplace.json"
+        marketplace = json.loads(marketplace_path.read_text(encoding="utf-8"))
+        self.assertEqual(marketplace["name"], "subagent-creator")
+        self.assertEqual(
+            marketplace["interface"]["displayName"], "Subagent Creator"
+        )
+        self.assertEqual(len(marketplace["plugins"]), 1)
+
+        entry = marketplace["plugins"][0]
+        self.assertEqual(entry["name"], "subagent-creator")
+        self.assertEqual(
+            entry["source"],
+            {
+                "source": "url",
+                "url": "https://github.com/KakaTelnet/Subagent-Creator.git",
+                "ref": "main",
+            },
+        )
+        self.assertEqual(
+            entry["policy"],
+            {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+        )
+        self.assertEqual(entry["category"], "Developer Tools")
+
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "codex plugin marketplace add KakaTelnet/Subagent-Creator --ref main",
+            readme,
+        )
 
     def test_dual_license_files_and_manifest_stay_consistent(self) -> None:
         manifest_path = PROJECT_ROOT / ".codex-plugin" / "plugin.json"
@@ -63,7 +107,7 @@ class RepositoryLayoutTests(unittest.TestCase):
     def test_skill_name_matches_directory_and_reference_exists(self) -> None:
         skill_path = SKILL_ROOT / "SKILL.md"
         content = skill_path.read_text(encoding="utf-8")
-        self.assertRegex(content, r"(?m)^name: construct-subagent$")
+        self.assertRegex(content, r"(?m)^name: subagent-creator$")
         match = re.search(r"\[Agent Team Contract\]\(([^)]+)\)", content)
         self.assertIsNotNone(match)
         reference = SKILL_ROOT / match.group(1)
@@ -71,7 +115,24 @@ class RepositoryLayoutTests(unittest.TestCase):
 
     def test_openai_metadata_invokes_named_skill(self) -> None:
         metadata = (SKILL_ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")
-        self.assertIn("$construct-subagent", metadata)
+        self.assertIn("$subagent-creator", metadata)
+
+    def test_scope_contract_defaults_to_project_and_guards_personal(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        contract = (SKILL_ROOT / "references" / "agent-team-contract.md").read_text(
+            encoding="utf-8"
+        )
+        validator = (SKILL_ROOT / "scripts" / "validate_team.py").read_text(
+            encoding="utf-8"
+        )
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        for content in (skill, contract, readme):
+            self.assertIn("personal", content)
+            self.assertIn("project", content)
+            self.assertIn("专项声明", content)
+        self.assertIn('default="project"', validator)
+        self.assertIn('"--personal-scope-authorized"', validator)
+        self.assertIn('self.codex_home / "agents"', validator)
 
     def test_runtime_codex_compatibility_gate_is_distributed(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -92,9 +153,22 @@ class RepositoryLayoutTests(unittest.TestCase):
         workflow = (PROJECT_ROOT / ".github" / "workflows" / "validate.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("agentskills validate skills/construct-subagent", workflow)
+        self.assertIn("agentskills validate skills/subagent-creator", workflow)
         self.assertIn("python3 scripts/validate_plugin.py .", workflow)
+        self.assertIn("python3 scripts/check_official_codex_schema.py", workflow)
         self.assertIn("python3 scripts/check_official_plugin_schema.py", workflow)
+
+    def test_local_codex_projection_and_official_compatibility_are_separate(self) -> None:
+        validator = (SKILL_ROOT / "scripts" / "validate_team.py").read_text(
+            encoding="utf-8"
+        )
+        checker = (PROJECT_ROOT / "scripts" / "check_official_codex_schema.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("CUSTOM_AGENT_ALLOWED_KEYS", validator)
+        self.assertIn('"local_codex_schema"', validator)
+        self.assertIn("OFFICIAL_SCHEMA_URL", checker)
+        self.assertIn("OFFICIAL_SUBAGENTS_URL", checker)
 
     def test_ci_actions_are_pinned_to_immutable_commits(self) -> None:
         workflow = (PROJECT_ROOT / ".github" / "workflows" / "validate.yml").read_text(

@@ -1,6 +1,6 @@
 # Commercial Licensing
 
-`construct-subagent` 采用双重授权模式。
+`subagent-creator` 采用双重授权模式。
 
 ## 开源授权
 
@@ -12,6 +12,6 @@
 
 ## 联系方式
 
-请通过 [GitHub 仓库](https://github.com/KakaTelnet/Construct-Subagent) 所有者公开的联系方式咨询；不要在公开 Issue 中发送敏感信息。
+请通过 [GitHub 仓库](https://github.com/KakaTelnet/Subagent-Creator) 所有者公开的联系方式咨询；不要在公开 Issue 中发送敏感信息。
 
 本文件仅说明商业授权渠道，本身不是商业许可证、报价或额外权利授予。在双方签署独立商业协议之前，仓库内容仅按照 `AGPL-3.0-only` 提供。

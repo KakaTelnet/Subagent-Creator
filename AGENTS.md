@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Treat `skills/construct-subagent/` as the complete distributable Skill package.
+- Treat `skills/subagent-creator/` as the complete distributable Skill package.
 - Keep repository documentation, CI, and regression tests outside the Skill package.
 - Keep runtime references one level below `SKILL.md` in `references/`.
 
@@ -16,5 +16,5 @@
 ## Required checks
 
 - Run the repository unit tests.
-- Validate `skills/construct-subagent/` with the pinned `skills-ref` package's `agentskills` command.
+- Validate `skills/subagent-creator/` with the pinned `skills-ref` package's `agentskills` command.
 - Validate the repository root with `scripts/validate_plugin.py`.

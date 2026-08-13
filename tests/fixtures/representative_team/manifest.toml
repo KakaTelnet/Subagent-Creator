@@ -1,30 +1,16 @@
-schema_version = 1
-generator = "construct-subagent"
+schema_version = 3
+generator = "subagent-creator"
 status = "ready"
 last_changed_at = "2026-08-13T20:00:00+08:00"
+scope = "project"
 
-[project]
-size = "medium"
+[context]
 summary = "Representative mixed-permission implementation team."
-complexity = ["multi-module"]
-task_types = ["coding", "testing"]
-risks = ["regression"]
-priorities = ["cost", "quality"]
 artifact_paths = ["artifact.txt"]
 constraints = ["Preserve user-managed Agents."]
 
-[cost_profile]
-objective = "minimize_total_cost"
-total_cost_formula = "model_call_cost + coordination_overhead_cost"
-baseline = "single-agent"
-measurement_scope = "per-task"
-metrics = ["agent_invocations", "coordination_overhead_cost", "coordination_tokens", "latency_ms", "model_call_cost", "model_input_tokens", "model_output_tokens", "success_rate", "total_cost"]
-
 [orchestration]
-coordinator = "main"
-topology = "flat"
 max_concurrent_agents = 2
-agent_direct_dispatch = false
 parallel_policy = ["Independent verification may run beside isolated implementation."]
 serial_policy = ["Serialize dependent exploration and implementation."]
 failure_flow = ["Worker BLOCKED -> main", "Verifier FAILED -> main"]
@@ -49,21 +35,13 @@ suitable_for = ["architecture decisions", "complex debugging"]
 name = "code_mapper"
 file = ".codex/agents/code-mapper.toml"
 description = "Read-only explorer for mapping implementation paths."
-responsibilities = ["Map affected code and tests."]
-boundaries = ["Do not edit files."]
 model = "economy-model"
 model_reasoning_effort = "low"
 escalation_model = "strong-model"
 escalation_reasoning_effort = "high"
-escalation_triggers = ["Conflicting architecture artifacts"]
 sandbox_mode = "read-only"
-permission_boundaries = ["Read repository files only."]
 skills = []
-tools = ["file read", "repository search"]
-inputs = ["AGENTS.md", "Task Contract"]
-outputs = ["Evidence map with exact file references"]
 invoke_when = ["Before implementation in an unfamiliar module"]
-parallel_groups = ["read-analysis"]
 serializes_with = ["implementation_worker"]
 cost_tier = "low"
 managed = true
@@ -72,21 +50,13 @@ managed = true
 name = "implementation_worker"
 file = ".codex/agents/implementation-worker.toml"
 description = "Implementation worker for bounded changes."
-responsibilities = ["Implement bounded changes and targeted tests."]
-boundaries = ["Do not change product requirements."]
 model = "economy-model"
 model_reasoning_effort = "medium"
 escalation_model = "strong-model"
 escalation_reasoning_effort = "high"
-escalation_triggers = ["Public contract change required"]
 sandbox_mode = "workspace-write"
-permission_boundaries = ["Write only within the project workspace."]
 skills = []
-tools = ["file edit", "test runner"]
-inputs = ["Evidence map", "Task Contract"]
-outputs = ["Focused diff and verification evidence"]
 invoke_when = ["After the implementation path is known"]
-parallel_groups = ["implementation"]
 serializes_with = ["code_mapper"]
 cost_tier = "low"
 managed = true

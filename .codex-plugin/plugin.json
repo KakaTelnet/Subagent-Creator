@@ -1,11 +1,15 @@
 {
-  "name": "construct-subagent",
+  "name": "subagent-creator",
   "version": "0.1.0",
-  "description": "Design and configure minimal, project-specific Codex subagent teams with cost-aware model routing.",
+  "description": "Design minimal Codex subagent teams with project scope by default and explicitly authorized personal scope.",
   "license": "AGPL-3.0-only",
   "author": {
-    "name": "construct-subagent contributors"
+    "name": "KakaTelnet",
+    "email": "kakatelnet@gmail.com",
+    "url": "https://github.com/KakaTelnet"
   },
+  "homepage": "https://github.com/KakaTelnet/Subagent-Creator",
+  "repository": "https://github.com/KakaTelnet/Subagent-Creator",
   "keywords": [
     "codex",
     "subagents",
@@ -14,16 +18,18 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "构建子 Agent 分身",
-    "shortDescription": "为项目配置精简、多模型的 Codex 子 Agent 团队",
-    "longDescription": "分析项目执行特征，配置最小充分的 Codex 子 Agent 团队，并用低成本模型承担边界清楚的低风险任务。",
-    "developerName": "construct-subagent contributors",
+    "displayName": "Subagent Creator",
+    "shortDescription": "默认项目级、可选个人级的精简多模型 Agent",
+    "longDescription": "分析执行特征，默认配置当前项目的最小充分 Codex 子 Agent；仅在用户明确声明时创建个人级全局 Agent。",
+    "developerName": "KakaTelnet",
     "category": "Developer Tools",
     "capabilities": [
+      "Read",
       "Write"
     ],
+    "websiteURL": "https://github.com/KakaTelnet/Subagent-Creator",
     "defaultPrompt": [
-      "Use $construct-subagent to design a minimal Codex subagent team for this project."
+      "Use $subagent-creator to design a minimal project-scoped Codex subagent team unless I explicitly request personal scope."
     ]
   }
 }

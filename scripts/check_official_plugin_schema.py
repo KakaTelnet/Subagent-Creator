@@ -47,7 +47,7 @@ def fetch_official_markdown() -> str:
     """Download the official manifest documentation with a bounded timeout."""
     request = Request(
         OFFICIAL_SCHEMA_URL,
-        headers={"User-Agent": "construct-subagent-schema-check/0.1"},
+        headers={"User-Agent": "subagent-creator-schema-check/0.1"},
     )
     with urlopen(request, timeout=20) as response:
         return response.read().decode("utf-8")

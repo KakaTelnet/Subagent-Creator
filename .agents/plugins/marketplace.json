@@ -1,0 +1,21 @@
+{
+  "name": "subagent-creator",
+  "interface": {
+    "displayName": "Subagent Creator"
+  },
+  "plugins": [
+    {
+      "name": "subagent-creator",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/KakaTelnet/Subagent-Creator.git",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

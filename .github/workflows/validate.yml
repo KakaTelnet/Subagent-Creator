@@ -48,12 +48,12 @@ jobs:
           source ./venv/bin/activate
           which python3
           which pip3
-          python3 -m py_compile scripts/check_official_plugin_schema.py scripts/validate_plugin.py skills/construct-subagent/scripts/validate_team.py tests/test_validate_plugin.py tests/test_validate_team.py tests/test_representative_fixture.py tests/test_repository_layout.py
+          python3 -m py_compile scripts/check_official_codex_schema.py scripts/check_official_plugin_schema.py scripts/validate_plugin.py skills/subagent-creator/scripts/validate_team.py tests/test_check_official_codex_schema.py tests/test_validate_plugin.py tests/test_validate_team.py tests/test_representative_fixture.py tests/test_repository_layout.py
 
       - name: Validate Skill package
         run: |
           source ./venv/bin/activate
-          agentskills validate skills/construct-subagent
+          agentskills validate skills/subagent-creator
 
       - name: Validate Plugin package
         run: |
@@ -64,3 +64,8 @@ jobs:
         run: |
           source ./venv/bin/activate
           python3 scripts/check_official_plugin_schema.py
+
+      - name: Check current official Codex schema compatibility
+        run: |
+          source ./venv/bin/activate
+          python3 scripts/check_official_codex_schema.py

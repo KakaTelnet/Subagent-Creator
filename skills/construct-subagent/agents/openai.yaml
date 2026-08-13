@@ -1,4 +1,0 @@
-interface:
-  display_name: "构建子 Agent 分身"
-  short_description: "为 Codex 项目构建最小充分的多模型子 Agent 团队"
-  default_prompt: "Use $construct-subagent to design and configure the minimal sufficient project-specific Codex subagent team."

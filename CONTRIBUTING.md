@@ -1,10 +1,10 @@
 # Contributing
 
-感谢参与 `construct-subagent`。
+感谢参与 `subagent-creator`。
 
 ## 变更边界
 
-- 将可安装、运行时必需的内容放在 `skills/construct-subagent/`。
+- 将可安装、运行时必需的内容放在 `skills/subagent-creator/`。
 - 将仓库级回归测试放在 `tests/`，不要把测试或开发记录塞进 Skill 包。
 - 保持 `SKILL.md` 精简；详细 schema、示例和长期契约放入 `references/`。
 - 不要提交 `venv/`、缓存、临时输出或目标项目生成的 `.codex/` 文件。
@@ -19,7 +19,7 @@ source ./venv/bin/activate
 which python3
 which pip3
 python3 -m unittest discover -s tests -p 'test_*.py' -v
-python3 skills/construct-subagent/scripts/validate_team.py --help
+python3 skills/subagent-creator/scripts/validate_team.py --help
 python3 scripts/check_official_plugin_schema.py
 ```
 

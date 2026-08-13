@@ -149,9 +149,9 @@ Use the `interface` object for install-surface metadata:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             (temporary_root / ".codex-plugin").mkdir()
-            (temporary_root / "skills" / "construct-subagent").mkdir(parents=True)
-            (temporary_root / "skills" / "construct-subagent" / "SKILL.md").write_text(
-                "---\nname: construct-subagent\ndescription: Example skill.\n---\nRun it.\n",
+            (temporary_root / "skills" / "subagent-creator").mkdir(parents=True)
+            (temporary_root / "skills" / "subagent-creator" / "SKILL.md").write_text(
+                "---\nname: subagent-creator\ndescription: Example skill.\n---\nRun it.\n",
                 encoding="utf-8",
             )
             (temporary_root / ".codex-plugin" / "plugin.json").write_text(

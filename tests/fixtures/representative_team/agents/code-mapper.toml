@@ -1,4 +1,4 @@
-# Managed by construct-subagent. Edit via $construct-subagent.
+# Managed by subagent-creator. Edit via $subagent-creator.
 name = "code_mapper"
 description = "Read-only explorer for mapping implementation paths."
 model = "economy-model"

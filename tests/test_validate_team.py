@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the construct-subagent team validator.
+"""Regression tests for the subagent-creator team validator.
 
 The tests create isolated temporary Codex projects, exercise successful and
 failing manifests, and print the standard unittest exit status.
@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SKILL_ROOT = PROJECT_ROOT / "skills" / "construct-subagent"
+SKILL_ROOT = PROJECT_ROOT / "skills" / "subagent-creator"
 VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_team.py"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
@@ -48,33 +48,19 @@ Escalation:
 '''
 
 
-MANIFEST_TOML = '''schema_version = 1
-generator = "construct-subagent"
+MANIFEST_TOML = '''schema_version = 3
+generator = "subagent-creator"
 status = "ready"
 last_changed_at = "2026-08-13T16:31:00+08:00"
+scope = "project"
 
-[project]
-size = "small"
+[context]
 summary = "Small single-module implementation project."
-complexity = ["single-module"]
-task_types = ["coding", "testing"]
-risks = ["regression"]
-priorities = ["cost", "quality"]
 artifact_paths = ["ai_docs/notes/20260813-0000_product-spec.md"]
 constraints = ["Preserve the public contract."]
 
-[cost_profile]
-objective = "minimize_total_cost"
-total_cost_formula = "model_call_cost + coordination_overhead_cost"
-baseline = "single-agent"
-measurement_scope = "per-task"
-metrics = ["agent_invocations", "coordination_overhead_cost", "coordination_tokens", "latency_ms", "model_call_cost", "model_input_tokens", "model_output_tokens", "success_rate", "total_cost"]
-
 [orchestration]
-coordinator = "main"
-topology = "flat"
 max_concurrent_agents = 2
-agent_direct_dispatch = false
 parallel_policy = ["Read-only analysis may run beside isolated tests."]
 serial_policy = ["Serialize edits to the same file, API, or schema."]
 failure_flow = ["Worker BLOCKED -> main", "Test FAILED -> main"]
@@ -99,21 +85,13 @@ suitable_for = ["architecture decisions", "complex debugging"]
 name = "code_mapper"
 file = ".codex/agents/code-mapper.toml"
 description = "Read-only explorer for mapping implementation paths."
-responsibilities = ["Map affected code and tests."]
-boundaries = ["Do not edit files.", "Do not redefine requirements."]
 model = "economy-model"
 model_reasoning_effort = "low"
 escalation_model = "strong-model"
 escalation_reasoning_effort = "high"
-escalation_triggers = ["Conflicting architecture artifacts"]
 sandbox_mode = "read-only"
-permission_boundaries = ["Read repository files only."]
 skills = []
-tools = ["file read", "repository search"]
-inputs = ["AGENTS.md", "Task Contract"]
-outputs = ["Evidence map with exact file references"]
 invoke_when = ["Before editing an unfamiliar module"]
-parallel_groups = ["read-analysis"]
 serializes_with = []
 cost_tier = "low"
 managed = true
@@ -126,6 +104,21 @@ max_concurrent_threads_per_session = 2
 '''
 
 
+PERSONAL_MANIFEST_TOML = MANIFEST_TOML.replace(
+    'scope = "project"',
+    'scope = "personal"',
+).replace(
+    'artifact_paths = ["ai_docs/notes/20260813-0000_product-spec.md"]',
+    "artifact_paths = []",
+).replace(
+    'file = ".codex/agents/code-mapper.toml"',
+    'file = "agents/code-mapper.toml"',
+).replace(
+    'summary = "Small single-module implementation project."',
+    'summary = "Reusable personal code-mapping Agent profile."',
+)
+
+
 def agent_manifest(name: str, file: str) -> str:
     """Return a complete secondary Agent manifest table for ordering tests."""
     return f'''
@@ -134,21 +127,13 @@ def agent_manifest(name: str, file: str) -> str:
 name = "{name}"
 file = "{file}"
 description = "Read-only explorer for mapping implementation paths."
-responsibilities = ["Map affected code and tests."]
-boundaries = ["Do not edit files.", "Do not redefine requirements."]
 model = "economy-model"
 model_reasoning_effort = "low"
 escalation_model = "strong-model"
 escalation_reasoning_effort = "high"
-escalation_triggers = ["Conflicting architecture artifacts"]
 sandbox_mode = "read-only"
-permission_boundaries = ["Read repository files only."]
 skills = []
-tools = ["file read", "repository search"]
-inputs = ["AGENTS.md", "Task Contract"]
-outputs = ["Evidence map with exact file references"]
 invoke_when = ["Before editing an unfamiliar module"]
-parallel_groups = ["read-analysis"]
 serializes_with = []
 cost_tier = "low"
 managed = true
@@ -206,6 +191,25 @@ class TeamValidatorTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+
+    def prepare_personal_scope(self) -> Path:
+        """Create an isolated Codex home containing one personal Agent team."""
+        project_agent = self.root / ".codex" / "agents" / "code-mapper.toml"
+        if project_agent.exists():
+            project_agent.unlink()
+        codex_home = self.root / "personal-codex-home"
+        (codex_home / "agents").mkdir(parents=True)
+        (codex_home / "subagent-creator").mkdir()
+        (codex_home / "subagent-creator" / "agent-team.toml").write_text(
+            PERSONAL_MANIFEST_TOML,
+            encoding="utf-8",
+        )
+        (codex_home / "config.toml").write_text(CONFIG_TOML, encoding="utf-8")
+        (codex_home / "agents" / "code-mapper.toml").write_text(
+            AGENT_TOML,
+            encoding="utf-8",
+        )
+        return codex_home
 
     def validate(self) -> dict[str, object]:
         """Run the validator against the isolated fixture project."""
@@ -300,25 +304,12 @@ class TeamValidatorTests(unittest.TestCase):
             report["errors"],
         )
 
-    def test_cost_profile_is_required(self) -> None:
-        manifest_path = self.root / ".codex" / "agent-team.toml"
-        manifest_path.write_text(
-            MANIFEST_TOML.replace("[cost_profile]", "[not_cost_profile]"),
-            encoding="utf-8",
-        )
-        report = self.validate()
-        self.assertEqual(report["status"], "FAIL")
-        self.assertTrue(
-            any("manifest.cost_profile must be" in error for error in report["errors"]),
-            report["errors"],
-        )
-
     def test_set_semantic_arrays_must_be_sorted_and_unique(self) -> None:
         manifest_path = self.root / ".codex" / "agent-team.toml"
         manifest_path.write_text(
             MANIFEST_TOML.replace(
-                'priorities = ["cost", "quality"]',
-                'priorities = ["quality", "cost", "cost"]',
+                'constraints = ["Preserve the public contract."]',
+                'constraints = ["Keep APIs stable.", "Keep APIs stable."]',
             ),
             encoding="utf-8",
         )
@@ -464,8 +455,9 @@ class TeamValidatorTests(unittest.TestCase):
 
     def test_missing_external_runtime_evidence_is_unverified(self) -> None:
         report = TeamValidator(self.root).validate()
-        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["status"], "PASS", report["errors"])
         self.assertEqual(report["configuration_status"], "PASS")
+        self.assertEqual(report["local_codex_schema"]["status"], "PASS")
         self.assertEqual(
             report["readiness_status"],
             "AGENT_TEAM_CONFIGURATION_READY",
@@ -473,6 +465,145 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(report["runtime_model_availability"]["status"], "UNVERIFIED")
         self.assertTrue(report["runtime_model_availability"]["configuration_usable"])
         self.assertEqual(report["runtime_model_availability"]["errors"], [])
+        self.assertEqual(report["runtime_codex_compatibility"]["status"], "UNVERIFIED")
+        self.assertEqual(report["runtime_codex_compatibility"]["errors"], [])
+
+    def test_default_cli_returns_configuration_ready_without_host_evidence(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(VALIDATOR_PATH),
+                "--root",
+                str(self.root),
+                "--json",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["scope"]["requested"], "project")
+        self.assertEqual(report["scope"]["manifest"], "project")
+        self.assertEqual(report["scope"]["authorization_status"], "NOT_REQUIRED")
+        self.assertEqual(
+            report["readiness_status"],
+            "AGENT_TEAM_CONFIGURATION_READY",
+        )
+
+    def test_personal_scope_requires_explicit_authorization(self) -> None:
+        codex_home = self.prepare_personal_scope()
+        report = TeamValidator(
+            self.root,
+            scope="personal",
+            codex_home=codex_home,
+        ).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertEqual(report["scope"]["authorization_status"], "MISSING")
+        self.assertTrue(
+            any("explicit user declaration" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_explicit_personal_scope_passes_without_project_agents(self) -> None:
+        codex_home = self.prepare_personal_scope()
+        project_agents = self.root / ".codex" / "agents"
+        for path in project_agents.glob("*.toml"):
+            path.unlink()
+        report = TeamValidator(
+            self.root,
+            scope="personal",
+            codex_home=codex_home,
+            personal_scope_authorized=True,
+        ).validate()
+        self.assertEqual(report["status"], "PASS", report["errors"])
+        self.assertEqual(report["configuration_status"], "PASS")
+        self.assertEqual(report["scope"]["requested"], "personal")
+        self.assertEqual(report["scope"]["manifest"], "personal")
+        self.assertEqual(report["scope"]["authorization_status"], "CALLER_ASSERTED")
+        self.assertEqual(
+            Path(report["scope"]["agents_dir"]),
+            codex_home / "agents",
+        )
+
+    def test_personal_scope_cli_requires_authorization_flag(self) -> None:
+        codex_home = self.prepare_personal_scope()
+        base_command = [
+            sys.executable,
+            str(VALIDATOR_PATH),
+            "--root",
+            str(self.root),
+            "--scope",
+            "personal",
+            "--codex-home",
+            str(codex_home),
+            "--json",
+        ]
+        rejected = subprocess.run(
+            base_command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(rejected.returncode, 1)
+        self.assertEqual(
+            json.loads(rejected.stdout)["scope"]["authorization_status"],
+            "MISSING",
+        )
+
+        accepted = subprocess.run(
+            [*base_command[:-1], "--personal-scope-authorized", "--json"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        self.assertEqual(
+            json.loads(accepted.stdout)["scope"]["authorization_status"],
+            "CALLER_ASSERTED",
+        )
+
+    def test_personal_manifest_cannot_persist_project_artifacts(self) -> None:
+        codex_home = self.prepare_personal_scope()
+        manifest_path = codex_home / "subagent-creator" / "agent-team.toml"
+        manifest_path.write_text(
+            PERSONAL_MANIFEST_TOML.replace(
+                "artifact_paths = []",
+                'artifact_paths = ["README.md"]',
+            ),
+            encoding="utf-8",
+        )
+        report = TeamValidator(
+            self.root,
+            scope="personal",
+            codex_home=codex_home,
+            personal_scope_authorized=True,
+        ).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("must be empty" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_cross_scope_agent_name_conflict_is_rejected(self) -> None:
+        codex_home = self.prepare_personal_scope()
+        project_agents = self.root / ".codex" / "agents"
+        (project_agents / "same-name.toml").write_text(
+            AGENT_TOML,
+            encoding="utf-8",
+        )
+        report = TeamValidator(
+            self.root,
+            scope="personal",
+            codex_home=codex_home,
+            personal_scope_authorized=True,
+        ).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("conflicts with project-scope" in error for error in report["errors"]),
+            report["errors"],
+        )
 
     def test_configuration_only_model_evidence_can_still_be_ready(self) -> None:
         report = TeamValidator(
@@ -766,7 +897,11 @@ class TeamValidatorTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime_permissions["agents"][0]["behavioral_boundaries"],
-            ["Do not edit files.", "Do not redefine requirements."],
+            [
+                "Do not edit files.",
+                "Do not redefine requirements.",
+                "Read repository files only.",
+            ],
         )
 
     def test_developer_instructions_require_all_contract_sections(self) -> None:
@@ -785,7 +920,7 @@ class TeamValidatorTests(unittest.TestCase):
             report["errors"],
         )
 
-    def test_developer_instructions_must_cover_manifest_items(self) -> None:
+    def test_native_instructions_are_the_behavioral_source_of_truth(self) -> None:
         agent_path = self.root / ".codex" / "agents" / "code-mapper.toml"
         agent_path.write_text(
             AGENT_TOML.replace(
@@ -795,9 +930,86 @@ class TeamValidatorTests(unittest.TestCase):
             encoding="utf-8",
         )
         report = self.validate()
+        self.assertEqual(report["configuration_status"], "PASS", report["errors"])
+        self.assertEqual(
+            report["runtime_permissions"]["agents"][0]["behavioral_boundaries"],
+            [
+                "Editing is allowed when convenient.",
+                "Do not redefine requirements.",
+                "Read repository files only.",
+            ],
+        )
+
+    def test_managed_agent_rejects_unknown_codex_fields(self) -> None:
+        agent_path = self.root / ".codex" / "agents" / "code-mapper.toml"
+        agent_path.write_text(
+            AGENT_TOML.replace(
+                'sandbox_mode = "read-only"',
+                'sandbox_mode = "read-only"\nfuture_setting = true',
+            ),
+            encoding="utf-8",
+        )
+        report = self.validate()
+        self.assertEqual(report["local_codex_schema"]["status"], "FAIL")
+        self.assertTrue(
+            any("unsupported fields" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_project_agents_table_rejects_unknown_scalar_settings(self) -> None:
+        config_path = self.root / ".codex" / "config.toml"
+        config_path.write_text(CONFIG_TOML + "future_setting = true\n", encoding="utf-8")
+        report = self.validate()
+        self.assertEqual(report["local_codex_schema"]["status"], "FAIL")
+        self.assertTrue(
+            any("not a supported Agent setting" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_legacy_manifest_v1_remains_read_compatible(self) -> None:
+        legacy = MANIFEST_TOML.replace("schema_version = 3", "schema_version = 1")
+        legacy = legacy.replace('scope = "project"\n', "")
+        legacy = legacy.replace("[context]\n", "[project]\n")
+        legacy = legacy.replace(
+            "[project]\n",
+            '[project]\nsize = "small"\ncomplexity = ["single-module"]\n',
+        )
+        legacy = legacy.replace(
+            'description = "Read-only explorer for mapping implementation paths."\nmodel =',
+            'description = "Read-only explorer for mapping implementation paths."\n'
+            'boundaries = ["Do not edit files."]\nmodel =',
+        )
+        (self.root / ".codex" / "agent-team.toml").write_text(
+            legacy,
+            encoding="utf-8",
+        )
+        report = self.validate()
+        self.assertEqual(report["status"], "PASS", report["errors"])
+
+    def test_legacy_manifest_v2_remains_read_compatible(self) -> None:
+        legacy = MANIFEST_TOML.replace("schema_version = 3", "schema_version = 2")
+        legacy = legacy.replace('scope = "project"\n', "")
+        legacy = legacy.replace("[context]\n", "[project]\n")
+        (self.root / ".codex" / "agent-team.toml").write_text(
+            legacy,
+            encoding="utf-8",
+        )
+        report = self.validate()
+        self.assertEqual(report["status"], "PASS", report["errors"])
+
+    def test_manifest_v3_rejects_legacy_duplicate_fields(self) -> None:
+        manifest = MANIFEST_TOML.replace(
+            "[context]\n",
+            '[context]\nsize = "small"\n',
+        )
+        (self.root / ".codex" / "agent-team.toml").write_text(
+            manifest,
+            encoding="utf-8",
+        )
+        report = self.validate()
         self.assertEqual(report["configuration_status"], "FAIL")
         self.assertTrue(
-            any("does not cover Manifest item: Do not edit files." in error for error in report["errors"]),
+            any("unsupported fields" in error for error in report["errors"]),
             report["errors"],
         )
 
@@ -875,6 +1087,40 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(report["status"], "FAIL")
         self.assertTrue(
             any("absent from the registry" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_model_cost_tier_must_be_relative_category(self) -> None:
+        manifest_path = self.root / ".codex" / "agent-team.toml"
+        manifest_path.write_text(
+            MANIFEST_TOML.replace(
+                'cost_tier = "low"',
+                'cost_tier = "bargain"',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        report = self.validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("cost_tier is invalid" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_agent_cost_tier_must_match_assigned_model(self) -> None:
+        manifest_path = self.root / ".codex" / "agent-team.toml"
+        manifest_path.write_text(
+            MANIFEST_TOML.replace(
+                'serializes_with = []\ncost_tier = "low"',
+                'serializes_with = []\ncost_tier = "medium"',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        report = self.validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("cost_tier does not match" in error for error in report["errors"]),
             report["errors"],
         )
 
