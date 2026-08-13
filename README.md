@@ -1,9 +1,27 @@
 # Construct Subagent
 
-为Codex项目创建多路子Agent，以供主Agent按需调度。
-子Agent按照功能配置对应的模型。
-使用Luna低成本模型应对检索、重复测试、日志归纳等低推理需求。
-核心模块开发使用Sol等高级模型以保证质量。
+- 本Skill用于为Codex项目创建多路子Agent，以供主Agent按需调度。
+- 子Agent按照功能配置对应的模型：
+	- 使用Sol等高级模型用于核心模块开发，以保证质量。
+    - 使用Luna低成本模型应对检索、重复测试、日志归纳等低推理需求，以降低成本。
+
+## Demo
+
+下面是一种可能的团队配置。实际角色、模型和数量会根据项目需求与当前可用模型动态调整。
+
+```text
+主线程：gpt-5.6-sol
+负责总体规划、拆解、调度和最终验收
+
+├─ coder：gpt-5.6-terra
+│  负责实现和修复代码
+│
+├─ tester：gpt-5.6-luna
+│  负责运行测试、补充测试、整理失败信息
+│
+└─ debugger：gpt-5.6-sol
+   负责分析复杂失败、重新形成修复方案
+```
 
 ## 背景
 
@@ -23,14 +41,14 @@ Codex Subagent 可以并行承担代码检索、实现、测试、调试和审�
 项目事实
   -> Codex 版本与官方 schema 兼容性 Gate
   -> 需求就绪 Gate
-  -> 当前可用模型 Registry
+  -> 受控模型 Registry
   -> Project Execution Profile
   -> 最小充分角色与串并行规则
   -> 受控写入和幂等对账
   -> 模型、权限、配置联合验证
 ```
 
-只有全部 Gate 和验证都通过，Skill 才会返回 `AGENT_TEAM_READY`。
+只有全部强制 Gate 和验证都通过，Skill 才会返回 `AGENT_TEAM_READY`；模型真实调用探测作为独立的增强证据报告，不会与配置就绪状态混为一谈。
 
 ## 它解决什么问题
 
@@ -156,17 +174,25 @@ Skill 包含只读验证器 `skills/construct-subagent/scripts/validate_team.py`
 
 验证器要求 Python 3.11+。模型目录参数只会得到 `CALLER_ASSERTED`，覆盖全部必需模型的成功调用才得到 `VERIFIED`；没有探测时，有效配置仍可使用。严格就绪检查要求每个 Agent 的 sandbox 和 approval policy 来自可信宿主或 spawn metadata，并逐一匹配配置默认值。Codex 版本低于 `0.145.0` 或高于已审查的 `0.147.x` 时仍会阻止就绪状态。
 
+## 仓库验证
+
+仓库测试使用隔离 fixture 覆盖混合权限、模型证据分层、成本指标和失败路径，不要求 CI 真实调用模型。Plugin 校验器对本项目使用的字段保持严格检查，同时用兼容性 fixture 覆盖官方 Schema 已支持的 `hooks`、`supportURL`、`brandColorDark` 和字符串或数组形式的 `defaultPrompt`。
+
+```bash
+source ./venv/bin/activate
+which python3
+which pip3
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+agentskills validate skills/construct-subagent
+python3 scripts/validate_plugin.py .
+```
+
 ## 开发与贡献
 
 贡献边界、虚拟环境要求和验证命令见 [CONTRIBUTING.md](CONTRIBUTING.md)。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
 ## 许可证
 
-本项目采用双重授权：
-
-- 开源版本使用 [AGPL-3.0-only](LICENSE)；
-- 需要闭源集成、闭源再分发或合同支持的组织，可以申请[独立商业许可证](COMMERCIAL-LICENSE.md)。
-
-商业使用本身不要求购买商业许可证；完整遵守 AGPL 即可免费商用。Skill 在目标项目中生成的配置，不会仅因“由本项目生成”而自动适用 AGPL。
+开源版本采用 [AGPL-3.0-only](LICENSE)；需要闭源使用时可申请[商业许可证](COMMERCIAL-LICENSE.md)。Skill 生成的 Agent 配置归使用者所有，不会仅因由本项目生成而自动适用 AGPL。
 
 Copyright (C) 2026 KakaTelnet and contributors.
