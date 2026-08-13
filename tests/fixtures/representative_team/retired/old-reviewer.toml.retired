@@ -1,0 +1,4 @@
+# Managed by construct-subagent. Edit via $construct-subagent.
+name = "old_reviewer"
+description = "Retired representative Agent."
+developer_instructions = "This retired file remains recoverable."

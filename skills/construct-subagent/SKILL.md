@@ -20,7 +20,7 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 - 采用扁平拓扑。Subagent 向主 Agent 返回结果，不直接决定或派发下一步。
 - 对权限分三层表述：`sandbox_mode` 是 Agent 的配置默认值；父线程当前 sandbox/approval 是 spawn 时可能重新应用的实时权限；“只运行测试”“不得改需求”等是仅靠 `developer_instructions` 实施的行为边界。不要把任一层声称为另一层的保证。
 - 保留用户维护的配置和不相关改动。只更新本 Skill 明确拥有的文件或受控标记块。
-- 使用当前可用模型注册表。不要永久硬编码某一组模型或假设账户一定可用。
+- 使用有受控来源的模型注册表，并把配置可用、目录声明和真实调用探测分开报告。不要永久硬编码某一组模型或把调用者参数描述成已验证的账户权限。
 - 让相同输入产生相同文件。不要因为再次运行而刷新时间戳、动作标签或重排内容。
 
 ## 必读契约
@@ -66,7 +66,7 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 - 现有 `AGENTS.md`、`.codex/config.toml`、`.codex/agents/*.toml` 和 `.codex/agent-team.toml`；
 - 项目级、用户级和已安装 Skill 的真实路径；
 - 并发上限、允许/禁止模型、成本/质量/速度优先级、网络和写入约束；
-- 当前父线程实际生效的 sandbox 与 approval policy；
+- 当前父线程权限上下文，以及每个 spawned Agent 实际生效的 sandbox 与 approval policy；
 - 当前 Codex 运行时版本及其独立来源；
 - 现有 Agent 的所有权：受本 Skill 管理、用户管理或来源不明。
 
@@ -81,11 +81,11 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 3. 用户显式提供的允许模型及能力约束；
 4. 当前官方 OpenAI 文档，只用于补充能力和定性成本信息。
 
-对每个候选记录来源、可用性证据、支持的 reasoning effort、能力层、相对成本层和适用任务。Manifest 的 `availability_source` 只能使用契约定义的受控值。只有当前运行时 registry、当前已认证 Codex 模型选择器或本次成功模型探测能确认“可用”；不要用公开文档、静态默认配置、用户猜测或 Manifest 自己的文字推断账户权限。
+对每个候选记录来源、支持的 reasoning effort、能力层、相对成本层和适用任务。Manifest 的 `availability_source` 只能使用契约定义的受控值。项目或用户 allowlist 可以支持配置生成，但不证明账户能调用模型；runtime registry 或模型选择器通过命令行传给验证器时只报告为 `CALLER_ASSERTED`；只有本次成功真实调用覆盖全部必需模型时才报告 `VERIFIED`。不要用公开文档、用户猜测或 Manifest 自己的文字推断账户权限。
 
-保留本次运行实际观察到的独立模型集合，供验证步骤通过 `--available-model` 传入。不要从写好的 Manifest 反向生成这个集合。
+保留本次运行实际观察到的目录模型集合，供验证步骤通过 `--available-model` 传入；若进行了真实调用，再通过 `--probed-model` 单独传入成功模型。不要从写好的 Manifest 反向生成任一集合。
 
-若无法确认至少一个可用执行模型，或成本优化要求多个模型但无法辨别候选能力/成本，停止且返回 `BLOCKED_BY_MODEL_REGISTRY`。不要静默写入猜测模型。
+若连受控 allowlist 都无法建立，或成本优化要求多个模型但无法辨别候选能力/成本，停止且返回 `BLOCKED_BY_MODEL_REGISTRY`。缺少真实探测本身不阻止配置生成，但必须明确标记 `UNVERIFIED`，不能声称模型已经成功调用。
 
 ### 5. 建立 Project Execution Profile
 
@@ -97,6 +97,7 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 - 并行性：可独立工作、共享文件、共享接口、前置依赖和高风险共享状态；
 - 风险：架构、数据、安全、兼容、性能和回归；
 - 项目约束和 Artifact 路径。
+- Cost Profile：以单 Agent 为基线，按“总费用 = 模型调用费用 + 协调开销”记录输入/输出/协调 Token、Agent 调用次数、端到端延迟和任务成功率。
 
 不要借此补做缺失的完整 Technical Design。只基于已确认方向设计当前阶段能力。
 
@@ -123,13 +124,13 @@ description: 为需求和主要实施方向已经明确的 Codex 项目分析执
 
 ### 7. 分配模型、权限和 Skill
 
-按“能力 × 任务价值 × 失败成本 × 调用频率 × Token 消耗 × 并行数量”选择模型：
+按“能力 × 任务价值 × 失败成本 × 调用频率 × Token 消耗 × 并行数量”选择模型，并以总费用、Token、调用次数、延迟和成功率共同衡量结果：
 
 - 将强推理模型留给架构判断、重大故障、高风险审查和最终裁决；
 - 将中高能力执行模型用于主要编码、复杂重构和独立模块实现；
 - 将高吞吐低成本模型用于探索、测试、批量检查、日志归纳和简单修改；
 - 仅使用 registry 明确支持的 reasoning effort；
-- 配置默认值使用最小权限：默认为 `read-only`；只有必须修改工作区的角色才使用 `workspace-write`；除非用户明确要求且风险已解释，否则禁止 `danger-full-access`。同时记录父线程当前实时权限，不能因 Agent 文件写了 `read-only` 就推断 spawned Agent 必然只读；
+- 配置默认值使用最小权限：默认为 `read-only`；只有必须修改工作区的角色才使用 `workspace-write`；除非用户明确要求且风险已解释，否则禁止 `danger-full-access`。允许团队混合使用不同 sandbox；从可信宿主或 spawn metadata 逐 Agent 记录实际有效 sandbox 和 approval policy，不能因父线程或 Agent 文件中的单一值推断所有 spawned Agent 权限；
 - 只绑定已存在且与职责匹配的 Skill。缺失 Skill 时记录 gap 或使用基础工作规则，不要自动创建新 Skill。
 
 固定 Agent 文件中的 `model` 会优先于 spawn override。为兼顾“便宜的默认模型”和“必要时升级”：
@@ -168,14 +169,14 @@ Manifest 使用稳定的 `last_changed_at`。仅在语义内容变化时更新�
 ### 9. 验证
 
 1. 本 Skill 的验证器因使用标准库 `tomllib`，要求 Python 3.11 或更高版本。先按目标 `AGENTS.md` 验证 pyenv/venv 路径和 `python3 --version`，再运行验证器。若目标项目 venv 低于 3.11，可在项目规则允许时使用独立的、pyenv 管理的 Python 3.11+ 验证专用 venv；验证器是只读的，不导入目标应用依赖。
-2. 运行 `scripts/validate_team.py --root <project-root> --availability-source <source> --available-model <model-id> ... --runtime-sandbox <mode> --runtime-approval-policy <policy> --require-runtime-permissions --codex-version <observed-version> --codex-version-source <source>`，并传入本次运行实际观察到的模型、父线程权限和 Codex 版本证据。每个已观察到的模型重复一次 `--available-model`；sandbox、approval 和版本必须来自当前运行时，不能从 Agent 文件或 Manifest 反推。
+2. 运行 `scripts/validate_team.py --root <project-root> --availability-source <source> --available-model <model-id> ... --permission-evidence-source <source> --agent-runtime-sandbox <agent>=<mode> --agent-runtime-approval-policy <agent>=<policy> --require-runtime-permissions --codex-version <observed-version> --codex-version-source <source>`。每个目录模型重复一次 `--available-model`；每个 Agent 重复一组实际 sandbox 与 approval policy；父线程权限可用 `--runtime-sandbox` 和 `--runtime-approval-policy` 作为上下文传入。若完成真实模型调用，再用 `--model-probe-source successful_model_probe` 和重复的 `--probed-model` 传入。所有运行时证据必须来自当前可信宿主、模型选择器、成功调用或 spawn metadata，不能从 Agent 文件或 Manifest 反推。
 3. 若无法取得 Python 3.11+ 环境，按验证脚本的同等规则人工检查并明确标注未运行脚本；不要伪造通过，也不要声明 `AGENT_TEAM_READY`。
-4. 确认报告的 `configuration_status = PASS`、`runtime_model_availability.status = VERIFIED`、`runtime_permissions.status = VERIFIED` 且 `runtime_codex_compatibility.status = VERIFIED`；再确认所有活动受管 Agent 可解析、名称唯一、必填字段齐全、模型存在于 registry、Skill 路径存在、配置默认 sandbox 与 Manifest 一致且与父线程实时 sandbox 匹配。
-5. 确认 `last_changed_at` 是带时区的 RFC 3339 时间戳，模型和 Agent 分别按 `id` 与 `name` 排序，每个 Agent 文件只被引用一次，Artifact 路径指向普通文件，升级配置按契约定义严格强于默认配置。
+4. 确认报告的 `configuration_status = PASS`、`runtime_model_availability.status != FAIL`、`runtime_permissions.status = VERIFIED` 且 `runtime_codex_compatibility.status = VERIFIED`。`UNVERIFIED` 表示只有配置证据，`CALLER_ASSERTED` 表示目录声明完整，`VERIFIED` 才表示全部模型真实探测成功；前两者允许配置就绪但不能声称真实调用已验证。再确认所有活动受管 Agent 可解析、名称唯一、必填字段齐全、模型存在于 registry、Skill 路径存在、配置默认 sandbox 与 Manifest 一致且逐 Agent 匹配实际有效 sandbox。
+5. 确认 `last_changed_at` 是带时区的 RFC 3339 时间戳，模型和 Agent 分别按 `id` 与 `name` 排序，集合型数组排序且无重复，`serializes_with` 引用存在、非自身且关系对称，每个 Agent 文件只被引用一次，Artifact 路径指向普通文件，升级配置按契约定义严格强于默认配置，Cost Profile 包含完整多指标。
 6. 确认 `.codex/config.toml` 可解析、没有显式禁用 agents，且并发上限为正数。
 7. 确认并行规则覆盖同文件、公共 API、数据库 schema、前置依赖和高风险共享状态。
 8. 用同一项目事实再次计算期望状态；若没有语义变化，应得到全 KEEP 且零文件 diff。
-9. 缺少独立模型证据或模型不在当前外部集合中时返回 `BLOCKED_BY_MODEL_REGISTRY`；父线程权限证据缺失或实时 sandbox 与配置默认值不一致时返回 `BLOCKED_BY_RUNTIME_PERMISSIONS`；Codex 版本状态不是 `VERIFIED` 时返回 `BLOCKED_BY_CODEX_COMPATIBILITY`；只有全部完成条件成立时返回 `AGENT_TEAM_READY`。
+9. 主动提供的模型目录/探测证据若缺少必需模型，返回 `BLOCKED_BY_MODEL_REGISTRY`；缺少真实探测只降低证据等级，不阻止配置使用。任一 Agent 权限证据缺失或实际 sandbox 与其配置默认值不一致时返回 `BLOCKED_BY_RUNTIME_PERMISSIONS`；Codex 版本状态不是 `VERIFIED` 时返回 `BLOCKED_BY_CODEX_COMPATIBILITY`；只有全部强制完成条件成立时返回 `AGENT_TEAM_READY`。
 
 ## 完成输出
 
@@ -185,7 +186,7 @@ Manifest 使用稳定的 `last_changed_at`。仅在语义内容变化时更新�
 2. Project Execution Profile 摘要；
 3. Agent 表：角色、CREATE/UPDATE/KEEP/RETIRE、默认模型、升级模型、sandbox、职责；
 4. 中央协调、失败升级和并行/串行规则；
-5. Cost Profile、模型可用性证据来源、Codex 版本与兼容性状态，以及配置状态与运行时可用性状态的明确区分；
+5. Cost Profile，包含总费用公式、Token、Agent 调用次数、延迟和成功率；同时给出模型目录/探测证据来源、Codex 版本与兼容性状态，并明确区分配置可用、调用者声明和真实探测；
 6. Skill gaps，并明确区分 Agent 配置默认 sandbox、父线程实时 sandbox/approval 和只能靠 `developer_instructions` 实施的行为边界；
 7. 写入的精确文件路径；
 8. 实际运行的验证命令和结果；
