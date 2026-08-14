@@ -113,6 +113,23 @@ class RepositoryLayoutTests(unittest.TestCase):
         reference = SKILL_ROOT / match.group(1)
         self.assertTrue(reference.is_file(), reference)
 
+    def test_skill_description_is_trigger_oriented(self) -> None:
+        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        match = re.search(r"(?m)^description: (.+)$", content)
+        self.assertIsNotNone(match)
+        description = match.group(1)
+        for expected in (
+            "当用户要求",
+            "创建或配置 Subagent",
+            "审计 Agent 团队",
+            "持久调度接线",
+            "全局角色库",
+            "只配置团队基础设施",
+        ):
+            self.assertIn(expected, description)
+        self.assertNotIn(".codex/agents", description)
+        self.assertNotIn("BLOCKED_BY_", description)
+
     def test_openai_metadata_invokes_named_skill(self) -> None:
         metadata = (SKILL_ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")
         self.assertIn("$subagent-creator", metadata)
