@@ -11,9 +11,11 @@ import unittest
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SKILL_SCRIPTS = PROJECT_ROOT / "skills" / "subagent-creator" / "scripts"
-FIXTURE_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "representative_team"
+FIXTURE_ROOT = (
+    PROJECT_ROOT / "tooling" / "tests" / "fixtures" / "representative_team"
+)
 sys.path.insert(0, str(SKILL_SCRIPTS))
 
 from validate_team import (  # noqa: E402

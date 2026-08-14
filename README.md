@@ -227,17 +227,17 @@ Skill 包含只读验证器 `skills/subagent-creator/scripts/validate_team.py`�
 
 仓库测试使用隔离 fixture 覆盖 Manifest v1–v3 读取兼容与 v4 持久接线、默认项目级行为、全局显式授权、可选升级、混合权限、模型/权限证据分层、本地严格 Codex 字段、指令契约、符号链接、相对成本层级和失败路径，不要求 CI 真实调用模型。CI 会读取当前官方 Codex JSON Schema 与 Subagents 文档，确认本 Skill 生成字段的存在性、类型和关键约束仍受支持；官方新增字段不会自动放宽本地严格范围。
 
-`tests/fixtures/forward_cases.json` 另外定义 5 个干净上下文前向测试场景，覆盖 EXPLAIN、AUDIT、提示词驱动 CREATE、`NO_AGENT_TEAM_NEEDED` 和幂等 UPDATE。执行时只把 `agent_input` 交给被测 Agent，`oracle` 由评估者保留；当前 CI 只验证场景 Schema，不把它们冒充为已完成的真实模型前向测试。
+`tooling/tests/fixtures/forward_cases.json` 另外定义 5 个干净上下文前向测试场景，覆盖 EXPLAIN、AUDIT、提示词驱动 CREATE、`NO_AGENT_TEAM_NEEDED` 和幂等 UPDATE。执行时只把 `agent_input` 交给被测 Agent，`oracle` 由评估者保留；当前 CI 只验证场景 Schema，不把它们冒充为已完成的真实模型前向测试。
 
 ```bash
 source ./venv/bin/activate
 which python3
 which pip3
-python3 -m unittest discover -s tests -p 'test_*.py' -v
+python3 -m unittest discover -s tooling/tests -p 'test_*.py' -v
 agentskills validate skills/subagent-creator
-python3 scripts/validate_plugin.py .
-python3 scripts/check_official_codex_schema.py
-python3 scripts/check_official_plugin_schema.py
+python3 tooling/scripts/validate_plugin.py .
+python3 tooling/scripts/check_official_codex_schema.py
+python3 tooling/scripts/check_official_plugin_schema.py
 ```
 
 ## 开发与贡献

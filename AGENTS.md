@@ -3,7 +3,7 @@
 ## Scope
 
 - Treat `skills/subagent-creator/` as the complete distributable Skill package.
-- Keep repository documentation, CI, and regression tests outside the Skill package.
+- Keep repository maintenance scripts, dependencies, fixtures, and regression tests under `tooling/`, outside the Skill package.
 - Keep GitHub community-health documents under `.github/`; reserve the repository root for discovery, legal, configuration, and dependency entrypoints.
 - Keep runtime references one level below `SKILL.md` in `references/`.
 
@@ -12,10 +12,10 @@
 - Preserve the Skill's requirement, model-registry, ownership, and idempotency gates.
 - Update the contract, validator, and tests together when changing the generated team schema.
 - Do not commit generated target-project `.codex/` files, virtual environments, caches, or temporary output.
-- Use a pyenv-managed Python through `./venv`, verify `python3` and `pip3` paths before execution, and keep permanent tests under `tests/`.
+- Use a pyenv-managed Python through `./venv`, verify `python3` and `pip3` paths before execution, and keep permanent tests under `tooling/tests/`.
 
 ## Required checks
 
 - Run the repository unit tests.
 - Validate `skills/subagent-creator/` with the pinned `skills-ref` package's `agentskills` command.
-- Validate the repository root with `scripts/validate_plugin.py`.
+- Validate the repository root with `tooling/scripts/validate_plugin.py`.

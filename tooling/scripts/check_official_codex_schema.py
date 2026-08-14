@@ -19,7 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SKILL_SCRIPTS = PROJECT_ROOT / "skills" / "subagent-creator" / "scripts"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 

@@ -11,9 +11,9 @@ import unittest
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-VALIDATOR = PROJECT_ROOT / "scripts" / "validate_plugin.py"
-sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+VALIDATOR = PROJECT_ROOT / "tooling" / "scripts" / "validate_plugin.py"
+sys.path.insert(0, str(PROJECT_ROOT / "tooling" / "scripts"))
 
 from check_official_plugin_schema import extract_documented_fields  # noqa: E402
 

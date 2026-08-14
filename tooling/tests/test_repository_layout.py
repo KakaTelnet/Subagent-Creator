@@ -15,12 +15,30 @@ import unittest
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SKILL_ROOT = PROJECT_ROOT / "skills" / "subagent-creator"
 
 
 class RepositoryLayoutTests(unittest.TestCase):
     """Keep repository-only files separate from the installable Skill package."""
+
+    def test_maintenance_files_live_under_tooling_directory(self) -> None:
+        for old_root_entry in ("requirements-dev.txt", "scripts", "tests"):
+            self.assertFalse((PROJECT_ROOT / old_root_entry).exists(), old_root_entry)
+        for maintained_path in (
+            "requirements-dev.txt",
+            "scripts/validate_plugin.py",
+            "scripts/check_official_plugin_schema.py",
+            "scripts/check_official_codex_schema.py",
+            "tests/test_repository_layout.py",
+            "tests/fixtures/forward_cases.json",
+        ):
+            self.assertTrue(
+                (PROJECT_ROOT / "tooling" / maintained_path).is_file(),
+                maintained_path,
+            )
+        gitignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("tmp_py/", gitignore.splitlines())
 
     def test_community_documents_live_under_github_directory(self) -> None:
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
@@ -242,7 +260,13 @@ class RepositoryLayoutTests(unittest.TestCase):
 
     def test_forward_cases_cover_new_behavior_without_leaking_oracles(self) -> None:
         fixture = json.loads(
-            (PROJECT_ROOT / "tests" / "fixtures" / "forward_cases.json").read_text(
+            (
+                PROJECT_ROOT
+                / "tooling"
+                / "tests"
+                / "fixtures"
+                / "forward_cases.json"
+            ).read_text(
                 encoding="utf-8"
             )
         )
@@ -307,17 +331,25 @@ class RepositoryLayoutTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("agentskills validate skills/subagent-creator", workflow)
-        self.assertIn("python3 scripts/validate_plugin.py .", workflow)
-        self.assertIn("python3 scripts/check_official_codex_schema.py", workflow)
-        self.assertIn("python3 scripts/check_official_plugin_schema.py", workflow)
+        self.assertIn(
+            "python3 -m unittest discover -s tooling/tests", workflow
+        )
+        self.assertIn("-r tooling/requirements-dev.txt", workflow)
+        self.assertIn("python3 tooling/scripts/validate_plugin.py .", workflow)
+        self.assertIn(
+            "python3 tooling/scripts/check_official_codex_schema.py", workflow
+        )
+        self.assertIn(
+            "python3 tooling/scripts/check_official_plugin_schema.py", workflow
+        )
 
     def test_local_codex_projection_and_official_compatibility_are_separate(self) -> None:
         validator = (SKILL_ROOT / "scripts" / "validate_team.py").read_text(
             encoding="utf-8"
         )
-        checker = (PROJECT_ROOT / "scripts" / "check_official_codex_schema.py").read_text(
-            encoding="utf-8"
-        )
+        checker = (
+            PROJECT_ROOT / "tooling" / "scripts" / "check_official_codex_schema.py"
+        ).read_text(encoding="utf-8")
         self.assertIn("CUSTOM_AGENT_ALLOWED_KEYS", validator)
         self.assertIn('"local_codex_schema"', validator)
         self.assertIn("OFFICIAL_SCHEMA_URL", checker)
@@ -342,6 +374,7 @@ class RepositoryLayoutTests(unittest.TestCase):
         )
         self.assertIn("package-ecosystem: pip", dependabot)
         self.assertIn("package-ecosystem: github-actions", dependabot)
+        self.assertIn("directory: /tooling", dependabot)
 
     def test_readiness_and_path_safety_contracts_are_distributed(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")

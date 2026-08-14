@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SKILL_ROOT = PROJECT_ROOT / "skills" / "subagent-creator"
 VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_team.py"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
