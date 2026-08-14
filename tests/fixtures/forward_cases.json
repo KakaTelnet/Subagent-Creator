@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "execution_note": "Materialize each workspace in a fresh temporary directory, pass only agent_input to the tested Agent, and keep oracle hidden for evaluator use.",
+  "cases": [
+    {
+      "id": "explain-without-inspection",
+      "agent_input": {
+        "workspace_requirements": [
+          "Use an empty temporary directory with no team files."
+        ],
+        "prompt": "使用 $subagent-creator 解释这个 Skill 的目标、使用方式和边界，不检查或修改团队文件。"
+      },
+      "oracle": {
+        "operation": "EXPLAIN",
+        "mutation": "none",
+        "required_outcomes": [
+          "Returns an explanation without loading unnecessary references.",
+          "Creates or changes no files."
+        ]
+      }
+    },
+    {
+      "id": "audit-read-only",
+      "agent_input": {
+        "workspace_requirements": [
+          "Use a temporary project containing a valid managed team plus one redundant managed role."
+        ],
+        "prompt": "使用 $subagent-creator 只读审计当前 Agent 团队，报告建议的 CREATE、UPDATE、KEEP 和 RETIRE，不要应用修复。"
+      },
+      "oracle": {
+        "operation": "AUDIT",
+        "mutation": "none",
+        "required_outcomes": [
+          "Reports the redundant role as a proposed recoverable RETIRE.",
+          "Confirms that no files changed."
+        ]
+      }
+    },
+    {
+      "id": "prompt-driven-create",
+      "agent_input": {
+        "workspace_requirements": [
+          "Use a temporary Git project whose README, source, tests, and AGENTS.md clearly define outcome and constraints but contain no formal Product Spec template.",
+          "Include one repeatable read-only exploration lane that materially benefits from isolated low-cost execution."
+        ],
+        "prompt": "使用 $subagent-creator 根据当前项目事实创建最小充分的项目级 Agent 团队；没有固定需求模板，请先检查现有代码和测试。"
+      },
+      "oracle": {
+        "operation": "CREATE",
+        "mutation": "managed_only",
+        "required_outcomes": [
+          "Does not block solely because a formal Product Spec template is absent.",
+          "Creates only roles with a stated persistent delegation advantage over the main Agent.",
+          "Completes a second all-KEEP and zero-diff reconciliation."
+        ]
+      }
+    },
+    {
+      "id": "no-team-needed",
+      "agent_input": {
+        "workspace_requirements": [
+          "Use a small temporary project with one bounded task and no material model, permission, context, parallelism, verification, or specialist distinction from the main Agent.",
+          "Do not include existing managed team files."
+        ],
+        "prompt": "使用 $subagent-creator 判断当前项目是否需要持久 Subagent 团队；只在持久委派确有价值时创建。"
+      },
+      "oracle": {
+        "operation": "CREATE",
+        "mutation": "none",
+        "required_outcomes": [
+          "Returns NO_AGENT_TEAM_NEEDED.",
+          "Creates no team, config, Manifest, or project-instruction files."
+        ]
+      }
+    },
+    {
+      "id": "update-idempotent",
+      "agent_input": {
+        "workspace_requirements": [
+          "Use a temporary project containing a valid managed team that already exactly matches current project facts."
+        ],
+        "prompt": "使用 $subagent-creator 更新当前 Agent 团队以匹配现有项目事实，并证明第二次对账为全 KEEP 和零文件 diff。"
+      },
+      "oracle": {
+        "operation": "UPDATE",
+        "mutation": "none",
+        "required_outcomes": [
+          "Reports every managed role as KEEP.",
+          "Preserves stable timestamps and exact file bytes.",
+          "Reports zero file diff after the second reconciliation."
+        ]
+      }
+    }
+  ]
+}

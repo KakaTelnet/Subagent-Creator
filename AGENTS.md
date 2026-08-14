@@ -4,6 +4,7 @@
 
 - Treat `skills/subagent-creator/` as the complete distributable Skill package.
 - Keep repository documentation, CI, and regression tests outside the Skill package.
+- Keep GitHub community-health documents under `.github/`; reserve the repository root for discovery, legal, configuration, and dependency entrypoints.
 - Keep runtime references one level below `SKILL.md` in `references/`.
 
 ## Change rules

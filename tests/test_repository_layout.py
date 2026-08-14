@@ -22,6 +22,13 @@ SKILL_ROOT = PROJECT_ROOT / "skills" / "subagent-creator"
 class RepositoryLayoutTests(unittest.TestCase):
     """Keep repository-only files separate from the installable Skill package."""
 
+    def test_community_documents_live_under_github_directory(self) -> None:
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+        for filename in ("CONTRIBUTING.md", "SECURITY.md"):
+            self.assertFalse((PROJECT_ROOT / filename).exists(), filename)
+            self.assertTrue((PROJECT_ROOT / ".github" / filename).is_file(), filename)
+            self.assertIn(f".github/{filename}", readme)
+
     def test_plugin_manifest_points_to_skill_directory(self) -> None:
         manifest_path = PROJECT_ROOT / ".codex-plugin" / "plugin.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -95,6 +102,8 @@ class RepositoryLayoutTests(unittest.TestCase):
             "SKILL.md",
             "agents/openai.yaml",
             "references/agent-team-contract.md",
+            "references/runtime-readiness.md",
+            "references/team-design.md",
             "scripts/validate_team.py",
         }
         actual = {
@@ -104,14 +113,59 @@ class RepositoryLayoutTests(unittest.TestCase):
         }
         self.assertEqual(actual, expected)
 
-    def test_skill_name_matches_directory_and_reference_exists(self) -> None:
+    def test_skill_name_matches_directory_and_references_exist(self) -> None:
         skill_path = SKILL_ROOT / "SKILL.md"
         content = skill_path.read_text(encoding="utf-8")
         self.assertRegex(content, r"(?m)^name: subagent-creator$")
-        match = re.search(r"\[Agent Team Contract\]\(([^)]+)\)", content)
-        self.assertIsNotNone(match)
-        reference = SKILL_ROOT / match.group(1)
-        self.assertTrue(reference.is_file(), reference)
+        for label in ("Team Design Guide", "Agent Team Contract", "Runtime Readiness"):
+            match = re.search(rf"\[{label}\]\(([^)]+)\)", content)
+            self.assertIsNotNone(match, label)
+            reference = SKILL_ROOT / match.group(1)
+            self.assertTrue(reference.is_file(), reference)
+
+        direct_reference_links = {
+            match.group(1)
+            for match in re.finditer(
+                r"\[[^\]]+\]\((references/[^)#]+\.md)\)", content
+            )
+        }
+        reference_files = {
+            str(path.relative_to(SKILL_ROOT))
+            for path in (SKILL_ROOT / "references").glob("*.md")
+        }
+        self.assertEqual(direct_reference_links, reference_files)
+
+    def test_skill_uses_progressive_reference_routing(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        self.assertLessEqual(len(skill.splitlines()), 100)
+        self.assertIn("Load only the reference needed", skill)
+        self.assertIn("only when external model", skill)
+        for explanation_route in (
+            "explaining role separation",
+            "explaining generated files and their lifecycle",
+            "explaining readiness levels or evidence trust",
+            "For a general explanation that does not depend on",
+        ):
+            self.assertIn(explanation_route, skill)
+        for implementation_detail in (
+            "HostModelEvidence",
+            "HostPermissionEvidence",
+            "HostCodexVersionEvidence",
+            "MINIMUM_CODEX_VERSION",
+            "max_concurrent_threads_per_session = 3",
+        ):
+            self.assertNotIn(implementation_detail, skill)
+
+        for reference_name in (
+            "agent-team-contract.md",
+            "runtime-readiness.md",
+            "team-design.md",
+        ):
+            reference = (
+                SKILL_ROOT / "references" / reference_name
+            ).read_text(encoding="utf-8")
+            if len(reference.splitlines()) > 100:
+                self.assertIn("## Contents", reference, reference_name)
 
     def test_skill_description_is_trigger_oriented(self) -> None:
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -119,20 +173,100 @@ class RepositoryLayoutTests(unittest.TestCase):
         self.assertIsNotNone(match)
         description = match.group(1)
         for expected in (
+            "解释、设计、创建、审计或更新",
             "当用户要求",
-            "创建或配置 Subagent",
+            "了解、创建或配置 Subagent",
             "审计 Agent 团队",
+            "多模型或并行 Agent 工作流",
+        ):
+            self.assertIn(expected, description)
+        for implementation_detail in (
             "持久调度接线",
             "全局角色库",
             "只配置团队基础设施",
+            ".codex/agents",
+            "BLOCKED_BY_",
         ):
-            self.assertIn(expected, description)
-        self.assertNotIn(".codex/agents", description)
-        self.assertNotIn("BLOCKED_BY_", description)
+            self.assertNotIn(implementation_detail, description)
+        for body_contract in (
+            "Default to a durable project-level team",
+            "global role library",
+            "Configure team infrastructure only",
+            "decompose implementation tasks",
+        ):
+            self.assertIn(body_contract, content)
 
-    def test_openai_metadata_invokes_named_skill(self) -> None:
+    def test_skill_separates_read_only_and_mutating_operations(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        for operation in ("`EXPLAIN`", "`AUDIT`", "`CREATE`", "`UPDATE`"):
+            self.assertIn(operation, skill)
+        self.assertIn("`EXPLAIN` and `AUDIT` are read-only", skill)
+        self.assertIn("reports proposed CREATE, UPDATE, KEEP, and RETIRE", skill)
+        self.assertIn("Run this step only in `CREATE` or `UPDATE`", skill)
+        self.assertIn("confirmation that no files changed", skill)
+
+    def test_skill_is_prompt_driven_and_allows_no_team_outcome(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        design = (SKILL_ROOT / "references" / "team-design.md").read_text(
+            encoding="utf-8"
+        )
+        contract = (
+            SKILL_ROOT / "references" / "agent-team-contract.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("natural-language prompt", skill)
+        self.assertIn("Do not require a fixed intake template", skill)
+        self.assertIn("Compare every candidate role with the main Agent", skill)
+        self.assertIn("NO_AGENT_TEAM_NEEDED", skill)
+        self.assertIn("Do not force a one-role team", design)
+        self.assertIn("pre-generation outcome, not a Manifest `status`", contract)
+
+    def test_openai_metadata_matches_current_skill(self) -> None:
         metadata = (SKILL_ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")
-        self.assertIn("$subagent-creator", metadata)
+        short_match = re.search(r'(?m)^  short_description: "([^"]+)"$', metadata)
+        self.assertIsNotNone(short_match)
+        self.assertGreaterEqual(len(short_match.group(1)), 25)
+        self.assertLessEqual(len(short_match.group(1)), 64)
+
+        prompt_match = re.search(r'(?m)^  default_prompt: "([^"]+)"$', metadata)
+        self.assertIsNotNone(prompt_match)
+        prompt = prompt_match.group(1)
+        for expected in (
+            "$subagent-creator",
+            "explain",
+            "audit",
+            "create",
+            "update",
+            "create no team",
+        ):
+            self.assertIn(expected, prompt)
+
+    def test_forward_cases_cover_new_behavior_without_leaking_oracles(self) -> None:
+        fixture = json.loads(
+            (PROJECT_ROOT / "tests" / "fixtures" / "forward_cases.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(fixture["schema_version"], 1)
+        cases = fixture["cases"]
+        self.assertEqual(
+            {case["id"] for case in cases},
+            {
+                "audit-read-only",
+                "explain-without-inspection",
+                "no-team-needed",
+                "prompt-driven-create",
+                "update-idempotent",
+            },
+        )
+        for case in cases:
+            self.assertIn("$subagent-creator", case["agent_input"]["prompt"])
+            self.assertNotIn("oracle", case["agent_input"])
+            self.assertIn(
+                case["oracle"]["operation"],
+                {"EXPLAIN", "AUDIT", "CREATE", "UPDATE"},
+            )
+            self.assertIn(case["oracle"]["mutation"], {"none", "managed_only"})
+            self.assertTrue(case["oracle"]["required_outcomes"])
 
     def test_scope_contract_defaults_to_project_and_guards_personal(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -143,25 +277,27 @@ class RepositoryLayoutTests(unittest.TestCase):
             encoding="utf-8"
         )
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-        for content in (skill, contract, readme):
-            self.assertIn("personal", content)
-            self.assertIn("project", content)
-            self.assertIn("专项声明", content)
+        self.assertIn("explicitly requests global", skill)
+        self.assertIn("Global scope requires an explicit statement", contract)
+        self.assertIn("专项声明", readme)
+        self.assertIn("project", skill)
+        self.assertIn("personal", contract)
+        self.assertIn("project", contract)
         self.assertIn('default="project"', validator)
         self.assertIn('"--personal-scope-authorized"', validator)
         self.assertIn('self.codex_home / "agents"', validator)
 
     def test_runtime_codex_compatibility_gate_is_distributed(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        contract = (SKILL_ROOT / "references" / "agent-team-contract.md").read_text(
+        runtime = (SKILL_ROOT / "references" / "runtime-readiness.md").read_text(
             encoding="utf-8"
         )
         validator = (SKILL_ROOT / "scripts" / "validate_team.py").read_text(
             encoding="utf-8"
         )
-        for content in (skill, contract):
-            self.assertIn("BLOCKED_BY_CODEX_COMPATIBILITY", content)
-            self.assertIn("runtime_codex_compatibility", content)
+        self.assertIn("Runtime Readiness", skill)
+        self.assertIn("BLOCKED_BY_CODEX_COMPATIBILITY", runtime)
+        self.assertIn("runtime_codex_compatibility", runtime)
         self.assertIn("MINIMUM_CODEX_VERSION = (0, 145, 0)", validator)
         self.assertIn("MAXIMUM_REVIEWED_CODEX_SERIES = (0, 147)", validator)
         self.assertIn('"--codex-version"', validator)
@@ -212,17 +348,20 @@ class RepositoryLayoutTests(unittest.TestCase):
         contract = (SKILL_ROOT / "references" / "agent-team-contract.md").read_text(
             encoding="utf-8"
         )
+        runtime = (SKILL_ROOT / "references" / "runtime-readiness.md").read_text(
+            encoding="utf-8"
+        )
         validator = (SKILL_ROOT / "scripts" / "validate_team.py").read_text(
             encoding="utf-8"
         )
-        for content in (skill, contract, validator):
+        for content in (skill, runtime, validator):
             self.assertIn("AGENT_TEAM_CONFIGURATION_READY", content)
             self.assertIn("AGENT_TEAM_RUNTIME_READY", content)
             self.assertIn("AGENT_TEAM_VERIFIED", content)
+        for content in (runtime, validator):
             self.assertIn("HOST_VERIFIED", content)
             self.assertIn("HostCodexVersionEvidence", content)
-        for content in (skill, contract):
-            self.assertIn("BLOCKED_BY_UNSAFE_PATH", content)
+        self.assertIn("BLOCKED_BY_UNSAFE_PATH", contract)
         self.assertIn("find_symlink_component", validator)
 
     def test_python_compatibility_is_machine_readable_and_exercised(self) -> None:

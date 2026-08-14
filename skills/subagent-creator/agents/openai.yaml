@@ -1,4 +1,4 @@
 interface:
   display_name: "Subagent Creator"
-  short_description: "创建项目级持久团队或显式全局角色库"
-  default_prompt: "Use $subagent-creator to design or update the minimal persistent Codex Subagent team for this project's already-defined development goal."
+  short_description: "解释、设计、创建、审计并持续演进最小充分的 Codex Subagent 团队"
+  default_prompt: "Use $subagent-creator to explain, audit, create, or update the minimal justified Codex Subagent team for this project, and create no team when persistent delegation is unnecessary."

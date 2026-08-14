@@ -55,7 +55,7 @@ Skill 使用三级就绪状态：配置与项目持久接线自洽时返回 `AGE
 
 ## 它解决什么问题
 
-`subagent-creator` 不是一套固定的 planner/coder/tester 模板。它会读取明确的需求、当前上下文和运行时能力，判断需要哪些执行角色，再生成对应作用域的 Codex Agent 配置。简单需求可以只有少量角色；只有当模型、权限、上下文隔离、并行边界或验证职责确实不同，才会拆出新的 Agent。
+`subagent-creator` 不是一套固定的 planner/coder/tester 模板。它会读取明确的需求、当前上下文和运行时能力，判断需要哪些执行角色，再生成对应作用域的 Codex Agent 配置。简单需求可能只需少量角色，也可能根本不需要持久 Subagent；只有当模型、权限、上下文隔离、并行边界或验证职责确实不同，才会拆出新的 Agent。没有角色能证明持久委派价值时，返回 `NO_AGENT_TEAM_NEEDED` 且不生成团队文件。
 
 ### 默认项目级，显式选择全局
 
@@ -97,10 +97,10 @@ Skill 只管理带有明确所有权标记的 Agent 文件，并使用 `CREATE`�
 
 ## 使用前提
 
-使用前，请确认：
+使用者不需要填写固定模板。Skill 会先从自然语言提示、代码、现有配置和权威项目事实中推导需要的输入。在写入前，以下事实需要足够清晰：
 
 - 产品结果、主要范围、非目标和关键约束已经明确；
-- 项目中有可供读取的 Product Spec、Change Spec、Technical Spec、Architecture 或等价事实来源；
+- 项目中有可供读取的代码、测试、Product Spec、Change Spec、Technical Spec、Architecture 或等价事实来源；
 - 项目、用户或当前 Codex 运行时能提供明确的模型 allowlist；真实模型调用探测是可选的增强证据；
 - 若希望取得可选的 `AGENT_TEAM_RUNTIME_READY` 或 `AGENT_TEAM_VERIFIED`，需要可信宿主集成直接提供模型目录、逐 Agent 权限、Codex 版本和必要时的真实调用证据，且版本位于本 Skill 已审查的 `0.145.0` 至 `0.147.x` 兼容窗口；普通配置生成不要求这些证据；
 - 允许 Skill 在目标作用域维护 Codex 配置；全局写入还必须由用户在本次请求中明确声明；
@@ -172,6 +172,18 @@ Skill 随后会：
 
 全局角色应描述可复用工作，而不是绑定当前仓库。例如“只读审查文档一致性”适合全局作用域；“修改这个项目的支付模块”应保留为项目级作用域。
 
+### 其他操作模式
+
+```text
+使用 $subagent-creator 解释当前 Agent 团队的目标、使用方式和边界，不修改文件。
+
+使用 $subagent-creator 只读审计当前团队，报告建议的 CREATE、UPDATE、KEEP 和 RETIRE，不应用修复。
+
+使用 $subagent-creator 更新当前团队以匹配现有项目事实，并再次对账以证明全 KEEP 和零 diff。
+```
+
+创建请求不保证一定生成团队；若主 Agent 已能直接承担全部工作且没有持久委派边界，Skill 应返回 `NO_AGENT_TEAM_NEEDED`。
+
 ## 生成结果
 
 根据作用域，Skill 可能维护以下内容：
@@ -215,6 +227,8 @@ Skill 包含只读验证器 `skills/subagent-creator/scripts/validate_team.py`�
 
 仓库测试使用隔离 fixture 覆盖 Manifest v1–v3 读取兼容与 v4 持久接线、默认项目级行为、全局显式授权、可选升级、混合权限、模型/权限证据分层、本地严格 Codex 字段、指令契约、符号链接、相对成本层级和失败路径，不要求 CI 真实调用模型。CI 会读取当前官方 Codex JSON Schema 与 Subagents 文档，确认本 Skill 生成字段的存在性、类型和关键约束仍受支持；官方新增字段不会自动放宽本地严格范围。
 
+`tests/fixtures/forward_cases.json` 另外定义 5 个干净上下文前向测试场景，覆盖 EXPLAIN、AUDIT、提示词驱动 CREATE、`NO_AGENT_TEAM_NEEDED` 和幂等 UPDATE。执行时只把 `agent_input` 交给被测 Agent，`oracle` 由评估者保留；当前 CI 只验证场景 Schema，不把它们冒充为已完成的真实模型前向测试。
+
 ```bash
 source ./venv/bin/activate
 which python3
@@ -228,7 +242,7 @@ python3 scripts/check_official_plugin_schema.py
 
 ## 开发与贡献
 
-贡献边界、虚拟环境要求和验证命令见 [CONTRIBUTING.md](CONTRIBUTING.md)。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
+贡献边界、虚拟环境要求和验证命令见 [CONTRIBUTING.md](.github/CONTRIBUTING.md)。安全问题请按 [SECURITY.md](.github/SECURITY.md) 私下报告。
 
 ## 许可证
 
