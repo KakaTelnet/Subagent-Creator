@@ -29,12 +29,18 @@ from validate_team import (  # noqa: E402
     OFFICIAL_ROOT_CONFIG_KEYS_USED,
     OFFICIAL_SKILL_CONFIG_KEYS_USED,
     OFFICIAL_SKILLS_KEYS_USED,
+    VALID_SANDBOXES,
 )
 
 
 OFFICIAL_SCHEMA_URL = "https://developers.openai.com/codex/config-schema.json"
 OFFICIAL_SUBAGENTS_URL = "https://developers.openai.com/codex/subagents.md"
 FIELD_PATTERN = re.compile(r"^\|?\s*`([a-z][a-z0-9_]*)`\s*\|", re.MULTILINE)
+FIELD_SPEC_PATTERN = re.compile(
+    r"^\|?\s*`(?P<name>[a-z][a-z0-9_]*)`\s*\|\s*"
+    r"(?P<type>[^|]+?)\s*\|\s*(?P<required>[^|]+?)\s*\|",
+    re.MULTILINE,
+)
 
 
 def fetch_text(url: str) -> str:
@@ -58,6 +64,23 @@ def extract_custom_agent_fields(markdown: str) -> set[str]:
     return set(FIELD_PATTERN.findall(markdown[start:end]))
 
 
+def extract_custom_agent_field_specs(markdown: str) -> dict[str, tuple[str, str]]:
+    """Return documented type and requiredness for custom Agent fields."""
+    start_marker = "### Custom agent file schema"
+    end_marker = "### Example custom agents"
+    start = markdown.find(start_marker)
+    end = markdown.find(end_marker, start + len(start_marker))
+    if start < 0 or end < 0:
+        raise ValueError("official custom Agent schema section could not be located")
+    return {
+        match.group("name"): (
+            match.group("type").strip().casefold(),
+            match.group("required").strip().casefold(),
+        )
+        for match in FIELD_SPEC_PATTERN.finditer(markdown[start:end])
+    }
+
+
 def schema_properties(schema: dict[str, Any], definition: str | None) -> set[str]:
     """Return property names from the root schema or one named definition."""
     target: Any
@@ -74,8 +97,50 @@ def schema_properties(schema: dict[str, Any], definition: str | None) -> set[str
     return set(target["properties"])
 
 
+def schema_definition(schema: dict[str, Any], definition: str) -> dict[str, Any]:
+    """Return one official schema definition as an object."""
+    definitions = schema.get("definitions")
+    if not isinstance(definitions, dict) or not isinstance(
+        definitions.get(definition),
+        dict,
+    ):
+        raise ValueError(f"official schema definition is missing: {definition}")
+    return definitions[definition]
+
+
+def resolve_schema_node(schema: dict[str, Any], node: Any) -> dict[str, Any]:
+    """Resolve the simple refs/allOf wrappers used by emitted Codex fields."""
+    if not isinstance(node, dict):
+        return {}
+    if isinstance(node.get("$ref"), str):
+        prefix = "#/definitions/"
+        reference = node["$ref"]
+        if reference.startswith(prefix):
+            return resolve_schema_node(
+                schema,
+                schema_definition(schema, reference.removeprefix(prefix)),
+            )
+    all_of = node.get("allOf")
+    if isinstance(all_of, list) and len(all_of) == 1:
+        return resolve_schema_node(schema, all_of[0])
+    return node
+
+
+def property_node(
+    schema: dict[str, Any],
+    definition: str | None,
+    field: str,
+) -> dict[str, Any]:
+    """Return one resolved property node from root or a definition."""
+    target = schema if definition is None else schema_definition(schema, definition)
+    properties = target.get("properties") if isinstance(target, dict) else None
+    if not isinstance(properties, dict):
+        return {}
+    return resolve_schema_node(schema, properties.get(field))
+
+
 def compatibility_errors(schema: dict[str, Any], markdown: str) -> list[str]:
-    """Return projected fields that current official sources no longer support."""
+    """Return projected fields or constraints current sources no longer support."""
     checks = {
         "root config": (
             OFFICIAL_ROOT_CONFIG_KEYS_USED,
@@ -103,6 +168,64 @@ def compatibility_errors(schema: dict[str, Any], markdown: str) -> list[str]:
         missing = sorted(required - observed)
         if missing:
             errors.append(f"{label} no longer exposes projected fields: {missing}")
+
+    expected_types = {
+        (None, "developer_instructions"): "string",
+        (None, "model"): "string",
+        (None, "model_reasoning_effort"): "string",
+        (None, "sandbox_mode"): "string",
+        (None, "skills"): "object",
+        ("AgentsToml", "enabled"): "boolean",
+        ("AgentsToml", "max_concurrent_threads_per_session"): "integer",
+        ("SkillsConfig", "config"): "array",
+        ("SkillConfig", "enabled"): "boolean",
+        ("SkillConfig", "path"): "string",
+    }
+    for (definition, field), expected_type in expected_types.items():
+        node = property_node(schema, definition, field)
+        if node.get("type") != expected_type:
+            label = "root config" if definition is None else definition
+            errors.append(
+                f"{label}.{field} must remain type {expected_type}, got: "
+                f"{node.get('type')!r}"
+            )
+
+    concurrency = property_node(
+        schema,
+        "AgentsToml",
+        "max_concurrent_threads_per_session",
+    )
+    minimum = concurrency.get("minimum")
+    if not isinstance(minimum, (int, float)) or minimum < 1:
+        errors.append(
+            "AgentsToml.max_concurrent_threads_per_session must retain minimum 1"
+        )
+
+    sandbox = property_node(schema, None, "sandbox_mode")
+    official_sandboxes = sandbox.get("enum")
+    if not isinstance(official_sandboxes, list) or not VALID_SANDBOXES.issubset(
+        set(official_sandboxes)
+    ):
+        errors.append(
+            "root config.sandbox_mode no longer accepts every emitted sandbox: "
+            f"{sorted(VALID_SANDBOXES)}"
+        )
+
+    skill_config = schema_definition(schema, "SkillConfig")
+    if "enabled" not in skill_config.get("required", []):
+        errors.append("SkillConfig.enabled must remain required")
+    config_items = property_node(schema, "SkillsConfig", "config").get("items")
+    resolved_items = resolve_schema_node(schema, config_items)
+    if resolved_items != schema_definition(schema, "SkillConfig"):
+        errors.append("SkillsConfig.config items must continue to use SkillConfig")
+
+    custom_specs = extract_custom_agent_field_specs(markdown)
+    for field in sorted(OFFICIAL_CUSTOM_AGENT_REQUIRED_KEYS):
+        field_type, required = custom_specs.get(field, ("", ""))
+        if "string" not in field_type:
+            errors.append(f"custom Agent docs.{field} must remain type string")
+        if required not in {"yes", "required"}:
+            errors.append(f"custom Agent docs.{field} must remain required")
     return errors
 
 

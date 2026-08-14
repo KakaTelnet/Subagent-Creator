@@ -51,7 +51,7 @@ Codex Subagent 可以并行承担代码检索、实现、测试、调试和审�
   -> 配置验证 + 可选宿主增强证据
 ```
 
-Skill 使用两层就绪状态：文件通过本地严格 Codex Schema、模型分配和编排契约自洽时，正常完成并返回 `AGENT_TEAM_CONFIGURATION_READY`；只有逐 Agent 权限由宿主直接验证且当前 Codex 版本处于已审查窗口时，才可选升级为 `AGENT_TEAM_READY`。模型真实调用探测仍作为独立的增强证据报告，不会与配置或权限就绪状态混为一谈。
+Skill 使用三级就绪状态：配置与项目持久接线自洽时返回 `AGENT_TEAM_CONFIGURATION_READY`；可信宿主进一步验证模型目录、逐 Agent 权限和 Codex 兼容性后返回 `AGENT_TEAM_RUNTIME_READY`；全部引用模型都由可信宿主完成真实调用后才返回 `AGENT_TEAM_VERIFIED`。全局作用域只是可复用角色库，最高只报告配置就绪。
 
 ## 它解决什么问题
 
@@ -74,7 +74,7 @@ Skill 会分析项目规模、技术复杂度、主要任务、共享文件、�
 
 ### 把模型成本用在正确的位置
 
-高吞吐、低成本模型适合只读探索、重复测试和日志归纳；强模型保留给架构判断、复杂故障和高风险审查。默认模型与升级模型都会写入团队 Manifest。验证结果会区分配置有效、运行时目录声明和真实调用探测，不会把调用者传入的模型名称直接标成已验证可调用。
+高吞吐、低成本模型适合只读探索、重复测试和日志归纳；强模型保留给架构判断、复杂故障和高风险审查。默认模型总会写入团队 Manifest；只有存在明确、更强且可用的候选时才写可选升级模型，否则失败直接返回主 Agent。验证结果会区分配置有效、调用者转述、可信运行时目录和真实调用探测。
 
 成本只用于生成配置时的模型路由：在满足能力和失败风险要求的前提下，优先让高频、低风险、边界清楚的工作使用相对低成本模型。本 Skill 不采集实际 Token、费用、调用次数、延迟或成功率，也不证明多 Agent 一定更省。
 
@@ -91,7 +91,7 @@ Skill 会分析项目规模、技术复杂度、主要任务、共享文件、�
 
 ### 安全地演进已有团队
 
-Skill 只管理带有明确所有权标记的 Agent 文件，并使用 `CREATE`、`UPDATE`、`KEEP`、`RETIRE` 对账期望状态。用户维护的 Agent 和无关配置会被保留；退役角色会进入可恢复的 `retired/` 目录，而不是被直接删除。相同输入再次运行时应得到全 `KEEP` 和零文件 diff。
+Skill 只管理带有明确所有权标记的 Agent 文件，并使用 `CREATE`、`UPDATE`、`KEEP`、`RETIRE` 对账期望状态。用户维护的 Agent 和无关配置会被保留；退役角色会进入可恢复的 `retired/` 目录，而不是被直接删除。相同事实再次执行提示词驱动的期望状态对账时，应得到全 `KEEP` 和零文件 diff。验证器 fingerprint 只证明现有受检文件稳定，最终幂等证据来自第二次对账和实际 diff。
 
 受管路径及其从作用域根开始的父目录不能是符号链接。发现目标 Codex 配置目录、Agent、Manifest、配置或项目 Artifact 路径包含链接时，Skill 会停止并返回 `BLOCKED_BY_UNSAFE_PATH`，避免读取一个路径却覆盖另一个文件。
 
@@ -102,7 +102,7 @@ Skill 只管理带有明确所有权标记的 Agent 文件，并使用 `CREATE`�
 - 产品结果、主要范围、非目标和关键约束已经明确；
 - 项目中有可供读取的 Product Spec、Change Spec、Technical Spec、Architecture 或等价事实来源；
 - 项目、用户或当前 Codex 运行时能提供明确的模型 allowlist；真实模型调用探测是可选的增强证据；
-- 若希望取得可选的 `AGENT_TEAM_READY`，当前 Codex 运行时还需提供可解析的版本证据，并位于本 Skill 已审查的 `0.145.0` 至 `0.147.x` 兼容窗口；普通配置生成不要求该证据；
+- 若希望取得可选的 `AGENT_TEAM_RUNTIME_READY` 或 `AGENT_TEAM_VERIFIED`，需要可信宿主集成直接提供模型目录、逐 Agent 权限、Codex 版本和必要时的真实调用证据，且版本位于本 Skill 已审查的 `0.145.0` 至 `0.147.x` 兼容窗口；普通配置生成不要求这些证据；
 - 允许 Skill 在目标作用域维护 Codex 配置；全局写入还必须由用户在本次请求中明确声明；
 - 目标项目能提供由 pyenv 管理、Python 3.11 或更高版本的虚拟环境，用于运行只读验证器。
 
@@ -156,11 +156,11 @@ Skill 目录安装和 Plugin marketplace 安装提供的是同一个 `$subagent-
 Skill 随后会：
 
 1. 读取适用的 `AGENTS.md`、Git 状态、产品/技术/验证文档和现有 Agent 配置；
-2. 使用离线严格字段投影检查将生成的原生 Agent 配置，并在可用时记录当前 Codex 版本作为宿主增强证据；
+2. 使用离线严格字段投影检查将生成的原生 Agent 配置，并在可用时分层记录调用者转述或宿主直证的 Codex 版本；
 3. 检查需求是否足以决定团队形态；
 4. 从受控 allowlist 建立模型 Registry，并在可用时附加运行时目录或真实调用证据；
 5. 生成 Execution Profile，并推导最小充分角色；
-6. 定义每个角色的职责、边界、默认模型、升级条件、权限、输入输出和并行规则；
+6. 定义每个角色的职责、边界、默认模型、可选升级条件、权限、输入输出和并行规则；
 7. 对账并最小化修改当前作用域配置；
 8. 运行验证器，并再次对账以确认幂等性。
 
@@ -181,14 +181,14 @@ Skill 随后会：
 | 项目级：`.codex/agent-team.toml`；全局：`<CODEX_HOME>/subagent-creator/agent-team.toml` | 轻量生成器账本，记录作用域、所有权、模型路由、调用时机和编排规则；不复制 Agent prompt |
 | 项目级：`.codex/agents/*.toml`；全局：`<CODEX_HOME>/agents/*.toml` | Codex 原生自定义 Agent 定义 |
 | 当前作用域 `config.toml` 的 `[agents]` | Agent 启用状态和并发上限；不会重写其他设置 |
-| 项目 `AGENTS.md` 受控标记块 | 仅项目级作用域可选使用；全局作用域不修改 |
+| 项目根当前生效的 `AGENTS.override.md` 或 `AGENTS.md` 受控标记块 | 项目级 Manifest v4 的必需持久调度入口；全局角色库不修改 |
 | 当前作用域 `agents/retired/*.toml.retired` | 已退役但可恢复的受管 Agent |
 
 完成报告会给出：
 
-- `AGENT_TEAM_CONFIGURATION_READY`、`AGENT_TEAM_READY` 或明确的 BLOCKED 状态；
+- `AGENT_TEAM_CONFIGURATION_READY`、`AGENT_TEAM_RUNTIME_READY`、`AGENT_TEAM_VERIFIED` 或明确的 BLOCKED 状态；
 - 每个角色的 `CREATE` / `UPDATE` / `KEEP` / `RETIRE` 动作；
-- 默认模型、升级模型、sandbox、职责和调用时机；
+- 默认模型、可选升级模型、sandbox、职责和调用时机；
 - 中央协调、失败升级、并行和串行规则；
 - 模型配置、目录声明与真实探测的分层状态，以及 Codex 版本兼容性、逐 Agent 运行时权限和配置一致性的验证结果；
 - 实际写入的文件及运行过的验证命令。
@@ -209,11 +209,11 @@ Skill 随后会：
 
 Skill 包含只读验证器 `skills/subagent-creator/scripts/validate_team.py`。它会联合检查轻量 Manifest、Agent TOML 的严格本地 Codex 字段投影、五段原生指令契约、Skill 路径、模型分配、升级强度、相对成本层级、文件所有权、符号链接和项目并发配置。逐 Agent 实际权限、真实模型调用与当前 Codex 版本属于独立的可选增强证据。
 
-验证器要求 Python 3.11+。默认只传 `--root` 时验证项目级配置，配置通过即返回 `AGENT_TEAM_CONFIGURATION_READY` 和退出码 0。全局配置必须同时传入 `--scope personal --codex-home <path> --personal-scope-authorized`；缺少显式授权标志会失败。这里的 `personal` 是 Codex 机器接口采用的全局作用域内部标识，不是第三种作用域。模型目录参数只会得到 `CALLER_ASSERTED`，覆盖全部必需模型的成功调用才得到 `VERIFIED`；没有探测时，有效配置仍可使用。权限 CLI 参数同样只能得到 `CALLER_ASSERTED`；完整就绪要求宿主直接提供 `HostPermissionEvidence`，并逐一匹配 sandbox 默认值和官方支持的 approval policy。Codex 版本低于 `0.145.0` 或高于已审查的 `0.147.x` 时只会阻止可选完整就绪，不会把已经通过 Schema 的配置重新判为无效。
+验证器要求 Python 3.11+；无法取得该环境时返回 `BLOCKED_BY_VALIDATION_ENVIRONMENT`，不授予 READY。默认只传 `--root` 时验证项目级配置和持久接线，配置通过即返回 `AGENT_TEAM_CONFIGURATION_READY`。全局角色库必须同时传入 `--scope personal --codex-home <path> --personal-scope-authorized`。CLI 模型目录、模型探测、权限和 Codex 版本证据分别只达到 `CALLER_ASSERTED`、`CALLER_PROBED`、`CALLER_ASSERTED` 和 `CALLER_ASSERTED`；只有宿主通过 Python API 直接提供 `HostModelEvidence`、`HostPermissionEvidence` 与 `HostCodexVersionEvidence` 才能升级到 runtime-ready 或 verified。
 
 ## 仓库验证
 
-仓库测试使用隔离 fixture 覆盖 Manifest v1/v2 读取兼容与 v3 作用域格式、默认项目级行为、全局显式授权、混合权限、模型/权限证据分层、本地严格 Codex 字段、指令契约、符号链接、相对成本层级和失败路径，不要求 CI 真实调用模型。CI 会读取当前官方 Codex JSON Schema 与 Subagents 文档，确认本 Skill 生成的字段仍受支持；官方新增字段不会自动放宽本地严格范围。Plugin Schema 兼容检查也继续保留。兼容检查每周自动运行，Python 和 GitHub Actions 依赖由 Dependabot 跟踪。
+仓库测试使用隔离 fixture 覆盖 Manifest v1–v3 读取兼容与 v4 持久接线、默认项目级行为、全局显式授权、可选升级、混合权限、模型/权限证据分层、本地严格 Codex 字段、指令契约、符号链接、相对成本层级和失败路径，不要求 CI 真实调用模型。CI 会读取当前官方 Codex JSON Schema 与 Subagents 文档，确认本 Skill 生成字段的存在性、类型和关键约束仍受支持；官方新增字段不会自动放宽本地严格范围。
 
 ```bash
 source ./venv/bin/activate

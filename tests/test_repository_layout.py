@@ -200,8 +200,10 @@ class RepositoryLayoutTests(unittest.TestCase):
         )
         for content in (skill, contract, validator):
             self.assertIn("AGENT_TEAM_CONFIGURATION_READY", content)
-            self.assertIn("AGENT_TEAM_READY", content)
+            self.assertIn("AGENT_TEAM_RUNTIME_READY", content)
+            self.assertIn("AGENT_TEAM_VERIFIED", content)
             self.assertIn("HOST_VERIFIED", content)
+            self.assertIn("HostCodexVersionEvidence", content)
         for content in (skill, contract):
             self.assertIn("BLOCKED_BY_UNSAFE_PATH", content)
         self.assertIn("find_symlink_component", validator)

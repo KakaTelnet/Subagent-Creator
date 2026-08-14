@@ -18,21 +18,44 @@ def compatible_schema() -> dict[str, object]:
     """Return the smallest official-shape schema covering emitted fields."""
     return {
         "properties": {
-            "developer_instructions": {},
-            "model": {},
-            "model_reasoning_effort": {},
-            "sandbox_mode": {},
-            "skills": {},
+            "developer_instructions": {"type": "string"},
+            "model": {"type": "string"},
+            "model_reasoning_effort": {"$ref": "#/definitions/ReasoningEffort"},
+            "sandbox_mode": {"$ref": "#/definitions/SandboxMode"},
+            "skills": {"$ref": "#/definitions/SkillsConfig"},
         },
         "definitions": {
             "AgentsToml": {
                 "properties": {
-                    "enabled": {},
-                    "max_concurrent_threads_per_session": {},
+                    "enabled": {"type": "boolean"},
+                    "max_concurrent_threads_per_session": {
+                        "minimum": 1,
+                        "type": "integer",
+                    },
                 }
             },
-            "SkillsConfig": {"properties": {"config": {}}},
-            "SkillConfig": {"properties": {"enabled": {}, "path": {}}},
+            "ReasoningEffort": {"minLength": 1, "type": "string"},
+            "SandboxMode": {
+                "enum": ["read-only", "workspace-write", "danger-full-access"],
+                "type": "string",
+            },
+            "SkillsConfig": {
+                "properties": {
+                    "config": {
+                        "items": {"$ref": "#/definitions/SkillConfig"},
+                        "type": "array",
+                    }
+                },
+                "type": "object",
+            },
+            "SkillConfig": {
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "path": {"type": "string"},
+                },
+                "required": ["enabled"],
+                "type": "object",
+            },
         },
     }
 
@@ -65,6 +88,20 @@ class OfficialCodexSchemaTests(unittest.TestCase):
         schema = compatible_schema()
         schema["properties"]["future_field"] = {}  # type: ignore[index]
         self.assertEqual(compatibility_errors(schema, SUBAGENTS_DOCUMENT), [])
+
+    def test_projected_type_drift_is_reported(self) -> None:
+        schema = compatible_schema()
+        schema["definitions"]["AgentsToml"]["properties"]["enabled"] = {  # type: ignore[index]
+            "type": "string"
+        }
+        errors = compatibility_errors(schema, SUBAGENTS_DOCUMENT)
+        self.assertTrue(any("AgentsToml.enabled" in error for error in errors), errors)
+
+    def test_projected_constraint_drift_is_reported(self) -> None:
+        schema = compatible_schema()
+        schema["definitions"]["SandboxMode"]["enum"] = ["read-only"]  # type: ignore[index]
+        errors = compatibility_errors(schema, SUBAGENTS_DOCUMENT)
+        self.assertTrue(any("sandbox_mode" in error for error in errors), errors)
 
 
 if __name__ == "__main__":

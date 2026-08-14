@@ -7,7 +7,7 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 
 ## 目标
 
-构造一支由主 Agent 集中协调的最小充分团队。默认生成项目级团队，只供当前项目使用；只有用户在本次请求中专项声明需要全局 Agent 时，才选择内部 `personal` 作用域，让角色可被所有项目发现。根据作用域内的执行事实生成角色，不套用固定的 planner/coder/tester 模板。
+构造一支由主 Agent 集中协调的最小充分团队。默认生成项目级团队，并通过项目指令建立可持续使用的调度入口；只有用户在本次请求中专项声明需要全局 Agent 时，才选择内部 `personal` 作用域，生成可被所有项目发现的角色库。全局角色库不建立跨项目持久编排。根据作用域内的执行事实生成角色，不套用固定的 planner/coder/tester 模板。
 
 只配置团队基础设施；不要执行后续 Task Engineering、编码、测试或验收。
 
@@ -22,7 +22,7 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 - 保留用户维护的配置和不相关改动。只更新本 Skill 明确拥有的文件或受控标记块。
 - 使用有受控来源的模型注册表，并把配置可用、目录声明和真实调用探测分开报告。不要永久硬编码某一组模型或把调用者参数描述成已验证的账户权限。
 - 在满足任务能力和失败风险要求的前提下优先使用相对低成本模型。只生成成本感知的模型路由，不采集实际 Token、费用、调用次数、延迟或成功率，也不证明多 Agent 一定更省。
-- 让相同输入产生相同文件。不要因为再次运行而刷新时间戳、动作标签或重排内容。
+- 提示词驱动的生成过程必须以相同事实重新计算期望状态。不要因为再次运行而刷新时间戳、动作标签或重排内容；用第二次对账和零 diff 提供幂等运行证据，不把验证器 fingerprint 误称为生成器幂等证明。
 - 作用域采用拒绝推断原则：没有明确的全局声明就固定使用项目级作用域。不得因为当前目录不是 Git 仓库、用户安装了全局 Skill、存在 `~/.codex` 或角色看起来可复用而自动选择内部 `personal` 作用域。
 
 ## 必读契约
@@ -42,7 +42,7 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 5. 读取适用的 `AGENTS.md`、项目 Git 状态和写入限制。不要覆盖不相关的 dirty/untracked 文件。
 6. 以本 Skill 已审查的契约和字段投影作为离线基线。当前会话可用 `openai-docs` 时，核对官方 **Subagents** 与 **Configuration Reference**；无法联网或无法取得文档不阻止普通配置生成，仓库 CI 负责持续对照官方 JSON Schema 和 Subagents 文档。
 7. 使用本 Skill 的离线严格字段投影验证将要生成的 Agent TOML 和目标作用域的 `[agents]` 设置。普通生成流程不能依赖实时下载官方 Schema。
-8. 可执行 `codex --version`，或读取宿主明确公开的等价运行时版本，作为可选宿主增强证据。缺少版本只报告 `UNVERIFIED`，不阻止配置生成；显式证据过旧、非法或属于未审查系列时，不得宣布 `AGENT_TEAM_READY`。
+8. 可执行 `codex --version` 形成调用者转述的兼容性证据；宿主集成也可直接提供等价运行时版本，形成可信宿主证据。两者都是可选增强，但只有后者能参与 runtime-ready。缺少版本只报告 `UNVERIFIED`，不阻止配置生成；显式证据过旧、非法或属于未审查系列时，不得宣布 `AGENT_TEAM_RUNTIME_READY` 或 `AGENT_TEAM_VERIFIED`。
 9. 若当前官方文档已与本 Skill 的本地字段投影冲突，返回 `BLOCKED_BY_CODEX_COMPATIBILITY`。先更新本 Skill 的契约、验证器和测试，不要在目标作用域中临时扩展未知字段。
 
 当前基线只作为待验证假设：项目级 Agent 位于 `.codex/agents/*.toml`，全局 Agent 位于 `~/.codex/agents/*.toml`，每个文件至少包含 `name`、`description`、`developer_instructions`；对应作用域设置位于各自 `config.toml` 的 `[agents]`。
@@ -91,11 +91,11 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 3. 用户显式提供的允许模型及能力约束；
 4. 当前官方 OpenAI 文档，只用于补充能力和定性成本信息。
 
-对每个候选记录来源、支持的 reasoning effort、能力层、相对成本层和适用任务。Manifest 的 `availability_source` 只能使用契约定义的受控值。项目或用户 allowlist 可以支持配置生成，但不证明账户能调用模型；runtime registry 或模型选择器通过命令行传给验证器时只报告为 `CALLER_ASSERTED`；只有本次成功真实调用覆盖全部必需模型时才报告 `VERIFIED`。不要用公开文档、用户猜测或 Manifest 自己的文字推断账户权限。
+对每个候选记录来源、支持的 reasoning effort、能力层、相对成本层和适用任务。Manifest 的 `availability_source` 只能使用契约定义的受控值。项目或用户 allowlist 可以支持配置生成，但不证明账户能调用模型；runtime registry 或模型选择器通过命令行传给验证器时只报告为 `CALLER_ASSERTED`，命令行转述的成功调用只报告为 `CALLER_PROBED`。只有可信宿主直接提供的成功调用证据覆盖全部必需模型时才报告 `VERIFIED`。不要用公开文档、用户猜测或 Manifest 自己的文字推断账户权限。
 
 保留本次运行实际观察到的目录模型集合，供验证步骤通过 `--available-model` 传入；若进行了真实调用，再通过 `--probed-model` 单独传入成功模型。不要从写好的 Manifest 反向生成任一集合。
 
-若连受控 allowlist 都无法建立，或成本优化要求多个模型但无法辨别候选能力/成本，停止且返回 `BLOCKED_BY_MODEL_REGISTRY`。缺少真实探测本身不阻止配置生成，但必须明确标记 `UNVERIFIED`，不能声称模型已经成功调用。
+若连受控 allowlist 都无法建立，或成本优化要求多个模型但无法辨别候选能力/成本，停止且返回 `BLOCKED_BY_MODEL_REGISTRY`。缺少可信真实探测本身不阻止配置生成；按现有证据标记 `UNVERIFIED`、`CALLER_ASSERTED` 或 `HOST_VERIFIED`，但不得标记 `VERIFIED` 或声称模型已经成功调用。
 
 ### 5. 分析 Execution Profile
 
@@ -125,7 +125,7 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 
 - Role、Responsibility、Boundary；
 - 默认模型与 reasoning effort；
-- 升级模型、升级 effort 和触发条件；
+- 可选的升级模型、升级 effort 和触发条件；没有必要的更强模型时省略这两个 Manifest 字段，并在 `Escalation:` 中要求返回主 Agent；
 - `sandbox_mode` 与行为性权限边界；
 - 已验证存在的 Skills、必要工具、输入 Artifact 和输出契约；
 - 调用时机、允许并行的组和禁止并行的冲突；
@@ -147,8 +147,8 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 固定 Agent 文件中的 `model` 会优先于 spawn override。为兼顾“便宜的默认模型”和“必要时升级”：
 
 1. 在 Agent 文件中固定默认模型；
-2. 在 Manifest 中记录 escalation model；
-3. 升级触发后，让主 Agent新建一次性 `default`/通用 Agent，并显式选择升级模型、附上同一 Task Contract 和该角色边界；
+2. 只有存在更强且有明确使用场景的候选时，才在 Manifest 中同时记录 escalation model 与 effort；
+3. 有升级配置且触发条件命中后，让主 Agent 新建一次性 `default`/通用 Agent，并显式选择升级模型、附上同一 Task Contract 和该角色边界；没有升级配置时直接返回主 Agent；
 4. 不要假设 spawn 参数能覆盖已固定模型的自定义 Agent 文件；
 5. 只有升级流程频繁且确有上下文隔离价值时，才创建独立升级角色。
 
@@ -167,7 +167,7 @@ description: 分析明确的执行需求，设计并创建最小充分、可幂�
 
 1. 更新或创建当前作用域的 `agents/*.toml`；
 2. 必要时只修改当前作用域 `config.toml` 中明确需要的 `[agents]` 标量，不重写其他设置；
-3. 仅在项目级作用域且确有长期协作 Gate 时，更新项目 `AGENTS.md` 中 `subagent-creator` 受控标记块；全局作用域不修改任何项目的 `AGENTS.md`；
+3. 项目级作用域必须在根目录当前实际生效的 `AGENTS.override.md`（存在且非空时）或 `AGENTS.md` 中更新 `subagent-creator` 受控标记块；该块要求主 Agent 在可能匹配团队角色的仓库任务开始时读取 `.codex/agent-team.toml`，逐项评估 `invoke_when`，并在命中且委派安全时使用对应角色。全局作用域不修改任何项目的指令文件；
 4. 最后写当前作用域的 `agent-team.toml`；
 5. 在运行结果中报告 CREATE / UPDATE / KEEP / RETIRE，不把本次动作写进 Manifest。
 
@@ -182,23 +182,23 @@ Manifest 使用稳定的 `last_changed_at`。仅在语义内容变化时更新�
 ### 9. 验证
 
 1. 本 Skill 的验证器因使用标准库 `tomllib`，要求 Python 3.11 或更高版本。先按目标 `AGENTS.md` 验证 pyenv/venv 路径和 `python3 --version`，再运行验证器。若目标项目 venv 低于 3.11，可在项目规则允许时使用独立的、pyenv 管理的 Python 3.11+ 验证专用 venv；验证器是只读的，不导入目标应用依赖。
-2. 项目级作用域运行：`scripts/validate_team.py --root <project-root>`。全局作用域只有在用户已专项声明后运行：`scripts/validate_team.py --root <context-root> --scope personal --codex-home <codex-home> --personal-scope-authorized`。其中 `personal` 只属于机器接口。验证器离线严格检查目标作用域的受管 Agent、`[agents]`、轻量 Manifest、所有权、模型路由、路径与编排约束；不要求权限、版本或真实模型调用证据。
-3. 有外部证据时再附加 `--availability-source <source> --available-model <model-id> ... --permission-evidence-source <source> --agent-runtime-sandbox <agent>=<mode> --agent-runtime-approval-policy <agent>=<policy> --codex-version <observed-version> --codex-version-source <source>`。每个目录模型重复一次 `--available-model`；每个 Agent 重复一组实际 sandbox 与 approval policy；父线程权限可用 `--runtime-sandbox` 和 `--runtime-approval-policy` 作为上下文传入。若完成真实模型调用，再用 `--model-probe-source successful_model_probe` 和重复的 `--probed-model` 传入。CLI 参数是调用者转述，只能达到 `CALLER_ASSERTED`，不能冒充宿主验证。只有宿主集成可通过 Python API 提供 `HostPermissionEvidence`；显式要求可选完整就绪时使用 `--require-host-readiness`（兼容别名为 `--require-runtime-permissions`）。
-4. 若无法取得 Python 3.11+ 环境，按验证脚本的同等规则人工检查并明确标注未运行脚本；不要伪造通过。配置自洽时最多声明 `AGENT_TEAM_CONFIGURATION_READY`。
-5. 正常完成确认顶层 `status = PASS`、`configuration_status = PASS`、`local_codex_schema.status = PASS`、`readiness_status = AGENT_TEAM_CONFIGURATION_READY` 或更高。此时模型、权限和 `runtime_codex_compatibility.status` 均可为 `UNVERIFIED`。模型的 `CALLER_ASSERTED` 表示目录声明完整，`VERIFIED` 才表示全部模型真实探测成功；权限只有 `HOST_VERIFIED` 才支持 `AGENT_TEAM_READY`。再确认所有活动受管 Agent 可解析、无符号链接、名称唯一、必填字段齐全、五个 instructions 段非空、模型存在于 registry、Skill 路径存在、配置默认 sandbox 与 Manifest 一致。
+2. 项目级作用域运行：`scripts/validate_team.py --root <project-root>`。全局角色库只有在用户已专项声明后运行：`scripts/validate_team.py --root <context-root> --scope personal --codex-home <codex-home> --personal-scope-authorized`。其中 `personal` 只属于机器接口。验证器离线严格检查目标作用域的受管 Agent、`[agents]`、轻量 Manifest、所有权、模型路由、路径与编排约束；项目级 v4 还必须验证当前实际生效的根级项目指令接线。
+3. 有外部证据时再附加 CLI 目录、探测、权限与版本参数。CLI 参数始终是调用者转述：模型目录、权限和兼容版本为 `CALLER_ASSERTED`，成功调用集合为 `CALLER_PROBED`，均不能冒充宿主验证。只有宿主集成通过 Python API 提供覆盖全部引用模型的 `HostModelEvidence`、逐 Agent 的 `HostPermissionEvidence` 和兼容的 `HostCodexVersionEvidence`，才可使用 `--require-runtime-readiness` 的语义并取得 `AGENT_TEAM_RUNTIME_READY`；真实调用也由可信宿主覆盖全部引用模型时，才可使用 `--require-verification` 并取得 `AGENT_TEAM_VERIFIED`。验证报告必须保留 `runtime_codex_compatibility` 证据块，明确版本来源、证据信任层、归一化版本、发布通道和兼容性结论。旧的 `--require-host-readiness` 与 `--require-runtime-permissions` 仅保留为 runtime-readiness 兼容别名。
+4. 若无法取得 Python 3.11+ 环境，不写 READY Manifest；返回 `BLOCKED_BY_VALIDATION_ENVIRONMENT`。可以人工检查并报告发现，但不得声明任一 READY 状态。
+5. 正常完成确认顶层 `status = PASS`、`configuration_status = PASS`、`local_codex_schema.status = PASS`、项目级 `persistent_orchestration.status = PASS`，以及 `readiness_status = AGENT_TEAM_CONFIGURATION_READY` 或更高。全局角色库的 `persistent_orchestration.status` 固定为 `NOT_APPLICABLE_GLOBAL_ROLE_LIBRARY`，最高只报告配置就绪。再确认所有活动受管 Agent 可解析、无符号链接、名称唯一、必填字段齐全、五个 instructions 段非空、模型存在于 registry、Skill 路径存在、配置默认 sandbox 与 Manifest 一致。
 6. 确认 `last_changed_at` 是带时区的 RFC 3339 时间戳，模型和 Agent 分别按 `id` 与 `name` 排序，集合型数组排序且无重复，`serializes_with` 引用存在、非自身且关系对称，每个 Agent 文件只被引用一次，Artifact 路径指向普通文件，升级配置按契约定义严格强于默认配置。
 7. 确认当前作用域的 `config.toml` 可解析、没有显式禁用 agents，且并发上限为正数。
 8. 确认并行规则覆盖同文件、公共 API、数据库 schema、前置依赖和高风险共享状态。
 9. 用同一项目事实再次计算期望状态；若没有语义变化，应得到全 KEEP 且零文件 diff。
-10. 主动提供的模型目录/探测证据若缺少必需模型，返回 `BLOCKED_BY_MODEL_REGISTRY`；缺少真实探测只降低证据等级，不阻止配置使用。符号链接路径返回 `BLOCKED_BY_UNSAFE_PATH`。没有权限或版本证据时正常返回 `AGENT_TEAM_CONFIGURATION_READY`；显式提供的权限或版本证据非法、矛盾时报告对应增强检查失败，但独立保留配置状态；只有权限为 `HOST_VERIFIED`、版本为 `VERIFIED` 且配置完成条件成立时返回 `AGENT_TEAM_READY`。
+10. 主动提供的模型目录/探测证据若缺少必需模型，返回 `BLOCKED_BY_MODEL_REGISTRY`；缺少真实探测只降低证据等级，不阻止配置使用。符号链接路径返回 `BLOCKED_BY_UNSAFE_PATH`。没有宿主证据时正常返回 `AGENT_TEAM_CONFIGURATION_READY`；项目级团队只有在持久接线、可信模型目录、逐 Agent 权限和 Codex 兼容性全部验证后返回 `AGENT_TEAM_RUNTIME_READY`，再由可信真实调用覆盖全部引用模型后返回 `AGENT_TEAM_VERIFIED`。
 
 ## 完成输出
 
 返回简洁、可核验的摘要：
 
-1. 状态：`AGENT_TEAM_CONFIGURATION_READY`、`AGENT_TEAM_READY` 或明确的 BLOCKED 状态；
+1. 状态：`AGENT_TEAM_CONFIGURATION_READY`、`AGENT_TEAM_RUNTIME_READY`、`AGENT_TEAM_VERIFIED` 或明确的 BLOCKED 状态；
 2. 作用域、目标 Codex 路径与 Execution Profile 摘要；
-3. Agent 表：角色、CREATE/UPDATE/KEEP/RETIRE、默认模型、升级模型、sandbox、职责；
+3. Agent 表：角色、CREATE/UPDATE/KEEP/RETIRE、默认模型、可选升级模型、sandbox、职责；
 4. 中央协调、失败升级和并行/串行规则；
 5. 模型路由依据、目录/探测证据来源、Codex 版本与兼容性状态，并明确区分配置可用、调用者声明和真实探测；
 6. Skill gaps，并明确区分 Agent 配置默认 sandbox、父线程实时 sandbox/approval 和只能靠 `developer_instructions` 实施的行为边界；

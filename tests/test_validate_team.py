@@ -8,6 +8,7 @@ failing manifests, and print the standard unittest exit status.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -21,7 +22,14 @@ SKILL_ROOT = PROJECT_ROOT / "skills" / "subagent-creator"
 VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_team.py"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
-from validate_team import HostPermissionEvidence, MANAGED_HEADER, TeamValidator  # noqa: E402
+from validate_team import (  # noqa: E402
+    HostCodexVersionEvidence,
+    HostModelEvidence,
+    HostPermissionEvidence,
+    MANAGED_HEADER,
+    PROJECT_AGENTS_MANAGED_BLOCK,
+    TeamValidator,
+)
 
 
 AGENT_TOML = f'''{MANAGED_HEADER}
@@ -43,12 +51,12 @@ Inputs:
 Outputs:
 - Evidence map with exact file references
 Escalation:
-- Conflicting architecture artifacts
+- Return conflicting architecture artifacts to the main Agent
 """
 '''
 
 
-MANIFEST_TOML = '''schema_version = 3
+MANIFEST_TOML = '''schema_version = 4
 generator = "subagent-creator"
 status = "ready"
 last_changed_at = "2026-08-13T16:31:00+08:00"
@@ -169,12 +177,33 @@ def host_permission_evidence(
     )
 
 
+def host_model_evidence(*, probed: bool = False) -> HostModelEvidence:
+    """Return trusted model evidence for every model in the default fixture."""
+    models = frozenset({"economy-model", "strong-model"})
+    return HostModelEvidence(
+        catalog_source="runtime_model_registry",
+        available_models=models,
+        probe_source="successful_model_probe" if probed else None,
+        probed_models=models if probed else frozenset(),
+    )
+
+
+def host_codex_version_evidence(
+    version: str = "codex-cli 0.147.0-alpha.6.5",
+) -> HostCodexVersionEvidence:
+    """Return a Codex version observation from the trusted host boundary."""
+    return HostCodexVersionEvidence(source="codex_cli", version=version)
+
+
 class TeamValidatorTests(unittest.TestCase):
     """Exercise validation, ownership, registry, and idempotency checks."""
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
+        self.previous_codex_home = os.environ.get("CODEX_HOME")
+        self.isolated_codex_home = self.root / "isolated-codex-home"
+        os.environ["CODEX_HOME"] = str(self.isolated_codex_home)
         (self.root / ".codex" / "agents").mkdir(parents=True)
         artifact = self.root / "ai_docs" / "notes" / "20260813-0000_product-spec.md"
         artifact.parent.mkdir(parents=True)
@@ -188,8 +217,16 @@ class TeamValidatorTests(unittest.TestCase):
             AGENT_TOML,
             encoding="utf-8",
         )
+        (self.root / "AGENTS.md").write_text(
+            f"# Project instructions\n\n{PROJECT_AGENTS_MANAGED_BLOCK}\n",
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
+        if self.previous_codex_home is None:
+            os.environ.pop("CODEX_HOME", None)
+        else:
+            os.environ["CODEX_HOME"] = self.previous_codex_home
         self.temp_dir.cleanup()
 
     def prepare_personal_scope(self) -> Path:
@@ -215,12 +252,10 @@ class TeamValidatorTests(unittest.TestCase):
         """Run the validator against the isolated fixture project."""
         return TeamValidator(
             self.root,
-            available_models={"economy-model", "strong-model"},
-            availability_source="runtime_model_registry",
+            host_model_evidence=host_model_evidence(),
             host_permission_evidence=host_permission_evidence(),
+            host_codex_version_evidence=host_codex_version_evidence(),
             require_runtime_permissions=True,
-            codex_version="codex-cli 0.147.0-alpha.6.5",
-            codex_version_source="codex_cli",
         ).validate()
 
     def test_valid_team_passes_and_fingerprint_is_stable(self) -> None:
@@ -230,11 +265,15 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(first["configuration_status"], "PASS")
         self.assertEqual(
             first["runtime_model_availability"]["status"],
-            "CALLER_ASSERTED",
+            "HOST_VERIFIED",
         )
         self.assertEqual(first["runtime_permissions"]["status"], "HOST_VERIFIED")
-        self.assertEqual(first["readiness_status"], "AGENT_TEAM_READY")
-        self.assertEqual(first["runtime_codex_compatibility"]["status"], "VERIFIED")
+        self.assertEqual(first["readiness_status"], "AGENT_TEAM_RUNTIME_READY")
+        self.assertEqual(first["persistent_orchestration"]["status"], "PASS")
+        self.assertEqual(
+            first["runtime_codex_compatibility"]["status"],
+            "HOST_VERIFIED",
+        )
         self.assertEqual(
             first["runtime_codex_compatibility"]["normalized_version"],
             "0.147.0-alpha.6.5",
@@ -265,12 +304,25 @@ class TeamValidatorTests(unittest.TestCase):
         ).validate()
         self.assertEqual(
             report["runtime_model_availability"]["status"],
-            "VERIFIED",
+            "CALLER_PROBED",
         )
         self.assertEqual(
             report["runtime_model_availability"]["evidence_level"],
-            "successful_model_probe",
+            "caller_reported_successful_model_probe",
         )
+
+    def test_trusted_model_probes_upgrade_team_to_verified(self) -> None:
+        report = TeamValidator(
+            self.root,
+            host_model_evidence=host_model_evidence(probed=True),
+            host_permission_evidence=host_permission_evidence(),
+            host_codex_version_evidence=host_codex_version_evidence(
+                "codex-cli 0.147.0"
+            ),
+            require_model_verification=True,
+        ).validate()
+        self.assertEqual(report["status"], "PASS", report["errors"])
+        self.assertEqual(report["readiness_status"], "AGENT_TEAM_VERIFIED")
 
     def test_last_changed_at_must_be_rfc3339(self) -> None:
         manifest_path = self.root / ".codex" / "agent-team.toml"
@@ -424,17 +476,68 @@ class TeamValidatorTests(unittest.TestCase):
 
     def test_same_model_with_higher_effort_is_a_valid_escalation(self) -> None:
         manifest_path = self.root / ".codex" / "agent-team.toml"
+        manifest = MANIFEST_TOML.replace(
+            'escalation_model = "strong-model"\n'
+            'escalation_reasoning_effort = "high"',
+            'escalation_model = "economy-model"\n'
+            'escalation_reasoning_effort = "medium"',
+        )
+        first_model = manifest.index("[[model_registry.models]]")
+        strong_model = manifest.index("[[model_registry.models]]", first_model + 1)
+        agents = manifest.index("[[agents]]")
+        manifest_path.write_text(
+            manifest[:strong_model] + manifest[agents:],
+            encoding="utf-8",
+        )
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["status"], "PASS", report["errors"])
+
+    def test_manifest_v4_allows_no_escalation_model(self) -> None:
+        manifest = MANIFEST_TOML.replace(
+            'escalation_model = "strong-model"\n'
+            'escalation_reasoning_effort = "high"\n',
+            "",
+        )
+        first_model = manifest.index("[[model_registry.models]]")
+        strong_model = manifest.index("[[model_registry.models]]", first_model + 1)
+        agents = manifest.index("[[agents]]")
+        manifest = manifest[:strong_model] + manifest[agents:]
+        (self.root / ".codex" / "agent-team.toml").write_text(
+            manifest,
+            encoding="utf-8",
+        )
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["status"], "PASS", report["errors"])
+
+    def test_manifest_v4_requires_escalation_pair(self) -> None:
+        manifest_path = self.root / ".codex" / "agent-team.toml"
+        manifest_path.write_text(
+            MANIFEST_TOML.replace('escalation_model = "strong-model"\n', ""),
+            encoding="utf-8",
+        )
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("must be supplied together" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_unused_registry_model_is_rejected(self) -> None:
+        manifest_path = self.root / ".codex" / "agent-team.toml"
         manifest_path.write_text(
             MANIFEST_TOML.replace(
                 'escalation_model = "strong-model"\n'
-                'escalation_reasoning_effort = "high"',
-                'escalation_model = "economy-model"\n'
-                'escalation_reasoning_effort = "medium"',
+                'escalation_reasoning_effort = "high"\n',
+                "",
             ),
             encoding="utf-8",
         )
-        report = self.validate()
-        self.assertEqual(report["status"], "PASS", report["errors"])
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("models not assigned" in error for error in report["errors"]),
+            report["errors"],
+        )
 
     def test_manifest_prose_does_not_count_as_availability_evidence(self) -> None:
         manifest_path = self.root / ".codex" / "agent-team.toml"
@@ -493,6 +596,47 @@ class TeamValidatorTests(unittest.TestCase):
             "AGENT_TEAM_CONFIGURATION_READY",
         )
 
+    def test_nonempty_agents_override_is_the_persistent_source(self) -> None:
+        override_path = self.root / "AGENTS.override.md"
+        override_path.write_text(
+            f"# Temporary project override\n\n{PROJECT_AGENTS_MANAGED_BLOCK}\n",
+            encoding="utf-8",
+        )
+        (self.root / "AGENTS.md").write_text(
+            "# This file is shadowed by the override\n",
+            encoding="utf-8",
+        )
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["configuration_status"], "PASS", report["errors"])
+        self.assertEqual(
+            Path(report["persistent_orchestration"]["source"]).resolve(),
+            override_path.resolve(),
+        )
+
+    def test_shadowed_agents_md_does_not_satisfy_persistent_wiring(self) -> None:
+        (self.root / "AGENTS.override.md").write_text(
+            "# Active override without the team bridge\n",
+            encoding="utf-8",
+        )
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("managed block" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_active_project_instructions_respect_size_limit(self) -> None:
+        (self.root / "AGENTS.md").write_text(
+            f"{PROJECT_AGENTS_MANAGED_BLOCK}\n" + ("x" * 33000),
+            encoding="utf-8",
+        )
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("project_doc_max_bytes" in error for error in report["errors"]),
+            report["errors"],
+        )
+
     def test_personal_scope_requires_explicit_authorization(self) -> None:
         codex_home = self.prepare_personal_scope()
         report = TeamValidator(
@@ -527,6 +671,34 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(
             Path(report["scope"]["agents_dir"]),
             codex_home / "agents",
+        )
+        self.assertEqual(
+            report["persistent_orchestration"]["status"],
+            "NOT_APPLICABLE_GLOBAL_ROLE_LIBRARY",
+        )
+
+    def test_global_role_library_cannot_satisfy_runtime_readiness(self) -> None:
+        codex_home = self.prepare_personal_scope()
+        report = TeamValidator(
+            self.root,
+            scope="personal",
+            codex_home=codex_home,
+            personal_scope_authorized=True,
+            host_model_evidence=host_model_evidence(),
+            host_permission_evidence=host_permission_evidence(),
+            require_runtime_permissions=True,
+            codex_version="codex-cli 0.147.0",
+            codex_version_source="codex_cli",
+        ).validate()
+        self.assertEqual(report["configuration_status"], "PASS")
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(
+            report["readiness_status"],
+            "AGENT_TEAM_CONFIGURATION_READY",
+        )
+        self.assertTrue(
+            any("runtime readiness Gate" in error for error in report["errors"]),
+            report["errors"],
         )
 
     def test_personal_scope_cli_requires_authorization_flag(self) -> None:
@@ -607,7 +779,55 @@ class TeamValidatorTests(unittest.TestCase):
             report["errors"],
         )
 
-    def test_configuration_only_model_evidence_can_still_be_ready(self) -> None:
+    def test_project_scope_checks_default_codex_home_for_conflicts(self) -> None:
+        global_agents = self.isolated_codex_home / "agents"
+        global_agents.mkdir(parents=True)
+        (global_agents / "code-mapper.toml").write_text(
+            AGENT_TOML,
+            encoding="utf-8",
+        )
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("conflicts with a global" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_global_agent_cannot_bind_project_internal_skill(self) -> None:
+        codex_home = self.prepare_personal_scope()
+        project_skill = self.root / "project-only-skill"
+        project_skill.mkdir()
+        (project_skill / "SKILL.md").write_text(
+            "---\nname: project-only-skill\ndescription: Project only.\n---\n",
+            encoding="utf-8",
+        )
+        manifest_path = codex_home / "subagent-creator" / "agent-team.toml"
+        manifest_path.write_text(
+            PERSONAL_MANIFEST_TOML.replace(
+                "skills = []",
+                f'skills = ["{project_skill}"]',
+            ),
+            encoding="utf-8",
+        )
+        agent_path = codex_home / "agents" / "code-mapper.toml"
+        agent_path.write_text(
+            AGENT_TOML
+            + f'\n[[skills.config]]\npath = "{project_skill}"\nenabled = true\n',
+            encoding="utf-8",
+        )
+        report = TeamValidator(
+            self.root,
+            scope="personal",
+            codex_home=codex_home,
+            personal_scope_authorized=True,
+        ).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("project-internal Skill" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_runtime_readiness_requires_trusted_model_catalog(self) -> None:
         report = TeamValidator(
             self.root,
             host_permission_evidence=host_permission_evidence(),
@@ -615,11 +835,14 @@ class TeamValidatorTests(unittest.TestCase):
             codex_version="codex-cli 0.147.0-alpha.6.5",
             codex_version_source="codex_cli",
         ).validate()
-        self.assertEqual(report["status"], "PASS", report["errors"])
+        self.assertEqual(report["status"], "FAIL")
         self.assertEqual(report["configuration_status"], "PASS")
         self.assertEqual(report["runtime_model_availability"]["status"], "UNVERIFIED")
         self.assertTrue(report["runtime_model_availability"]["configuration_usable"])
-        self.assertEqual(report["readiness_status"], "AGENT_TEAM_READY")
+        self.assertEqual(
+            report["readiness_status"],
+            "AGENT_TEAM_CONFIGURATION_READY",
+        )
 
     def test_model_absent_from_runtime_evidence_fails(self) -> None:
         report = TeamValidator(
@@ -717,7 +940,10 @@ class TeamValidatorTests(unittest.TestCase):
             any("cannot satisfy strict" in error for error in report["errors"]),
             report["errors"],
         )
-        self.assertEqual(report["runtime_codex_compatibility"]["status"], "VERIFIED")
+        self.assertEqual(
+            report["runtime_codex_compatibility"]["status"],
+            "CALLER_ASSERTED",
+        )
 
     def test_caller_asserted_permissions_allow_configuration_only_readiness(self) -> None:
         report = TeamValidator(
@@ -773,15 +999,38 @@ class TeamValidatorTests(unittest.TestCase):
     def test_minimum_stable_codex_version_passes(self) -> None:
         report = TeamValidator(
             self.root,
-            available_models={"economy-model", "strong-model"},
-            availability_source="runtime_model_registry",
+            host_model_evidence=host_model_evidence(),
             host_permission_evidence=host_permission_evidence(),
+            host_codex_version_evidence=host_codex_version_evidence(
+                "codex-cli 0.145.0"
+            ),
             require_runtime_permissions=True,
-            codex_version="codex-cli 0.145.0",
-            codex_version_source="codex_cli",
         ).validate()
         self.assertEqual(report["status"], "PASS", report["errors"])
-        self.assertEqual(report["runtime_codex_compatibility"]["status"], "VERIFIED")
+        self.assertEqual(
+            report["runtime_codex_compatibility"]["status"],
+            "HOST_VERIFIED",
+        )
+
+    def test_runtime_readiness_requires_trusted_codex_version(self) -> None:
+        report = TeamValidator(
+            self.root,
+            host_model_evidence=host_model_evidence(),
+            host_permission_evidence=host_permission_evidence(),
+            require_runtime_permissions=True,
+            codex_version="codex-cli 0.147.0",
+            codex_version_source="codex_cli",
+        ).validate()
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["configuration_status"], "PASS")
+        self.assertEqual(
+            report["runtime_codex_compatibility"]["status"],
+            "CALLER_ASSERTED",
+        )
+        self.assertTrue(
+            any("HostCodexVersionEvidence" in error for error in report["errors"]),
+            report["errors"],
+        )
 
     def test_prerelease_of_minimum_codex_version_is_unsupported_old(self) -> None:
         report = TeamValidator(
@@ -878,14 +1127,14 @@ class TeamValidatorTests(unittest.TestCase):
     def test_parent_permission_context_does_not_force_one_team_sandbox(self) -> None:
         report = TeamValidator(
             self.root,
-            available_models={"economy-model", "strong-model"},
-            availability_source="runtime_model_registry",
+            host_model_evidence=host_model_evidence(),
             host_permission_evidence=host_permission_evidence(
                 parent_sandbox="workspace-write"
             ),
+            host_codex_version_evidence=host_codex_version_evidence(
+                "codex-cli 0.147.0"
+            ),
             require_runtime_permissions=True,
-            codex_version="codex-cli 0.147.0",
-            codex_version_source="codex_cli",
         ).validate()
         self.assertEqual(report["status"], "PASS", report["errors"])
         self.assertEqual(report["runtime_permissions"]["status"], "HOST_VERIFIED")
@@ -919,6 +1168,22 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(report["configuration_status"], "FAIL")
         self.assertTrue(
             any("non-empty Outputs: section" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_escalation_section_must_route_back_to_main_agent(self) -> None:
+        agent_path = self.root / ".codex" / "agents" / "code-mapper.toml"
+        agent_path.write_text(
+            AGENT_TOML.replace(
+                "- Return conflicting architecture artifacts to the main Agent",
+                "- Retry indefinitely",
+            ),
+            encoding="utf-8",
+        )
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("route blocked or failed work" in error for error in report["errors"]),
             report["errors"],
         )
 
@@ -969,7 +1234,7 @@ class TeamValidatorTests(unittest.TestCase):
         )
 
     def test_legacy_manifest_v1_remains_read_compatible(self) -> None:
-        legacy = MANIFEST_TOML.replace("schema_version = 3", "schema_version = 1")
+        legacy = MANIFEST_TOML.replace("schema_version = 4", "schema_version = 1")
         legacy = legacy.replace('scope = "project"\n', "")
         legacy = legacy.replace("[context]\n", "[project]\n")
         legacy = legacy.replace(
@@ -985,22 +1250,30 @@ class TeamValidatorTests(unittest.TestCase):
             legacy,
             encoding="utf-8",
         )
-        report = self.validate()
+        report = TeamValidator(self.root).validate()
         self.assertEqual(report["status"], "PASS", report["errors"])
+        self.assertEqual(
+            report["persistent_orchestration"]["status"],
+            "LEGACY_UNVERIFIED",
+        )
 
     def test_legacy_manifest_v2_remains_read_compatible(self) -> None:
-        legacy = MANIFEST_TOML.replace("schema_version = 3", "schema_version = 2")
+        legacy = MANIFEST_TOML.replace("schema_version = 4", "schema_version = 2")
         legacy = legacy.replace('scope = "project"\n', "")
         legacy = legacy.replace("[context]\n", "[project]\n")
         (self.root / ".codex" / "agent-team.toml").write_text(
             legacy,
             encoding="utf-8",
         )
-        report = self.validate()
+        report = TeamValidator(self.root).validate()
         self.assertEqual(report["status"], "PASS", report["errors"])
+        self.assertEqual(
+            report["persistent_orchestration"]["status"],
+            "LEGACY_UNVERIFIED",
+        )
 
     def test_manifest_v3_rejects_legacy_duplicate_fields(self) -> None:
-        manifest = MANIFEST_TOML.replace(
+        manifest = MANIFEST_TOML.replace("schema_version = 4", "schema_version = 3").replace(
             "[context]\n",
             '[context]\nsize = "small"\n',
         )
@@ -1025,6 +1298,19 @@ class TeamValidatorTests(unittest.TestCase):
         self.assertEqual(report["configuration_status"], "FAIL")
         self.assertTrue(
             any("must not use a symbolic link" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_project_root_symbolic_link_is_rejected(self) -> None:
+        linked_root = self.root.parent / f"{self.root.name}-linked-root"
+        linked_root.symlink_to(self.root, target_is_directory=True)
+        try:
+            report = TeamValidator(linked_root).validate()
+        finally:
+            linked_root.unlink()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("root must not be a symbolic link" in error for error in report["errors"]),
             report["errors"],
         )
 

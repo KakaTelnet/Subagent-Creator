@@ -16,5 +16,5 @@ Inputs:
 Outputs:
 - Focused diff and verification evidence
 Escalation:
-- Public contract change required
+- Return required public contract changes to the main Agent
 """

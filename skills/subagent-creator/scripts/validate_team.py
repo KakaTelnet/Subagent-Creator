@@ -3,10 +3,11 @@
 
 The validator is read-only. It checks the scoped manifest, Codex custom-agent
 TOML files, Agent settings, model assignments, skill paths, managed
-file ownership, instruction coverage, symbolic-link safety, permission evidence,
-and the observed Codex runtime version. It distinguishes configuration readiness
-from host-verified runtime readiness. It requires Python 3.11 or newer, exits
-with 0 on success, and exits with 1 on requested validation failures.
+file ownership, instruction coverage, symbolic-link safety, persistent project
+wiring, model and permission evidence, and the observed Codex runtime version.
+It distinguishes configuration, runtime, and real-invocation readiness. It
+requires Python 3.11 or newer, exits with 0 on success, and exits with 1 on
+requested validation failures.
 """
 
 from __future__ import annotations
@@ -25,6 +26,17 @@ from typing import Any, Mapping
 
 
 MANAGED_HEADER = "# Managed by subagent-creator. Edit via $subagent-creator."
+PROJECT_AGENTS_MANAGED_BLOCK = """<!-- subagent-creator:start -->
+## Agent Team Runtime Contract
+
+- At the start of any repository task that may involve exploration, implementation, testing, debugging, review, or other work described by a project Subagent, read `.codex/agent-team.toml` before deciding whether to delegate.
+- Evaluate every active `[[agents]].invoke_when` against the current task before the main Agent performs matching work.
+- Treat its `[orchestration]` and `[[agents]]` entries as the source of truth for invocation, parallel or serial constraints, model escalation, and failure routing.
+- When an Agent's `invoke_when` condition matches and delegation is permitted, the main Agent must delegate to that role or state why it is unsafe or unnecessary.
+- The main Agent owns dispatch and final decisions; Subagents return results and do not dispatch follow-up work.
+- Product requirements may only be changed by the main Agent with user authority.
+<!-- subagent-creator:end -->"""
+DEFAULT_PROJECT_DOC_MAX_BYTES = 32 * 1024
 VALID_CAPABILITY_TIERS = {"strong", "balanced", "throughput"}
 VALID_COST_TIERS = {"high", "medium", "low"}
 VALID_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
@@ -74,7 +86,7 @@ EFFORT_RANK = {
     "ultra": 6,
 }
 
-SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {1, 2, 3}
+SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {1, 2, 3, 4}
 
 # This is the intentionally narrow Codex schema projection emitted by this Skill.
 # Runtime validation is offline and strict; CI separately verifies that every
@@ -195,6 +207,34 @@ class HostPermissionEvidence:
     parent_approval_policy: str | None = None
 
 
+@dataclass(frozen=True)
+class HostModelEvidence:
+    """Model catalog and probe observations supplied by a trusted host adapter.
+
+    The CLI cannot construct this evidence. Catalog coverage can establish
+    runtime readiness; successful real-invocation probes for every required
+    model can additionally establish verified readiness.
+    """
+
+    catalog_source: str
+    available_models: frozenset[str]
+    probe_source: str | None = None
+    probed_models: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class HostCodexVersionEvidence:
+    """Codex version observed directly by a trusted host adapter.
+
+    The CLI version flags remain caller assertions even when their source label
+    names a host runtime. Only this typed host boundary can satisfy runtime
+    readiness.
+    """
+
+    source: str
+    version: str
+
+
 def parse_codex_version(raw_version: str) -> dict[str, Any] | None:
     """Parse the exact output of ``codex --version`` or a host runtime value."""
     match = CODEX_VERSION_PATTERN.fullmatch(raw_version.strip())
@@ -232,6 +272,7 @@ class TeamValidator:
         availability_source: str | None = None,
         probed_models: set[str] | None = None,
         model_probe_source: str | None = None,
+        host_model_evidence: HostModelEvidence | None = None,
         runtime_sandbox: str | None = None,
         runtime_approval_policy: str | None = None,
         agent_runtime_sandboxes: dict[str, str] | None = None,
@@ -239,15 +280,18 @@ class TeamValidator:
         permission_evidence_source: str | None = None,
         host_permission_evidence: HostPermissionEvidence | None = None,
         require_runtime_permissions: bool = False,
+        require_model_verification: bool = False,
         codex_version: str | None = None,
         codex_version_source: str | None = None,
+        host_codex_version_evidence: HostCodexVersionEvidence | None = None,
     ) -> None:
-        self.root = root.resolve()
+        self.requested_root = root.expanduser().absolute()
+        self.root = self.requested_root.resolve()
         self.scope = scope
         self.codex_home = (
             codex_home.expanduser().absolute()
             if codex_home is not None
-            else default_codex_home() if scope == "personal" else None
+            else default_codex_home()
         )
         self.personal_scope_authorized = personal_scope_authorized
         if scope == "personal" and self.codex_home is not None:
@@ -269,26 +313,35 @@ class TeamValidator:
         self.availability_errors: list[str] = []
         self.runtime_permission_errors: list[str] = []
         self.codex_compatibility_errors: list[str] = []
+        self.readiness_errors: list[str] = []
         self.checked_files: set[Path] = set()
         self.available_models = available_models
         self.availability_source = availability_source
         self.probed_models = probed_models
         self.model_probe_source = model_probe_source
+        self.host_model_evidence = host_model_evidence
         self.runtime_sandbox = runtime_sandbox
         self.runtime_approval_policy = runtime_approval_policy
         self.agent_runtime_sandboxes = agent_runtime_sandboxes
         self.agent_runtime_approval_policies = agent_runtime_approval_policies
         self.permission_evidence_source = permission_evidence_source
         self.host_permission_evidence = host_permission_evidence
-        self.require_runtime_permissions = require_runtime_permissions
+        self.require_model_verification = require_model_verification
+        self.require_runtime_permissions = (
+            require_runtime_permissions or require_model_verification
+        )
         self.codex_version = codex_version
         self.codex_version_source = codex_version_source
+        self.host_codex_version_evidence = host_codex_version_evidence
         self.required_models: set[str] = set()
+        self.assigned_models: set[str] = set()
         self.manifest_availability_sources: set[str] = set()
         self.configured_agent_permissions: list[dict[str, Any]] = []
         self.configured_agent_names: set[str] = set()
         self.manifest_schema_version: int | None = None
         self.manifest_scope: str | None = None
+        self.persistent_orchestration_status = "UNVERIFIED"
+        self.persistent_orchestration_source: Path | None = None
 
     def error(self, message: str) -> None:
         """Record a user-actionable validation error."""
@@ -488,7 +541,7 @@ class TeamValidator:
                 "declaration and "
                 "personal_scope_authorized=True"
             )
-        if self.manifest_schema_version == 3:
+        if self.manifest_schema_version in {3, 4}:
             manifest_scope = manifest.get("scope")
             if not isinstance(manifest_scope, str) or manifest_scope not in VALID_SCOPES:
                 self.error(
@@ -506,18 +559,20 @@ class TeamValidator:
             if self.scope != "project":
                 self.error(
                     "manifest schema versions 1 and 2 are project-only; regenerate "
-                    "the global configuration with schema version 3"
+                    "the global configuration with schema version 4"
                 )
 
     def validate_context(self, manifest: dict[str, Any]) -> None:
         """Validate the lightweight generation context retained for regeneration."""
-        table_name = "context" if self.manifest_schema_version == 3 else "project"
+        table_name = (
+            "context" if self.manifest_schema_version in {3, 4} else "project"
+        )
         context_table = manifest.get(table_name)
         context = f"manifest.{table_name}"
         if not isinstance(context_table, dict):
             self.error(f"{context} must be a TOML table")
             return
-        if self.manifest_schema_version == 3:
+        if self.manifest_schema_version in {3, 4}:
             self.validate_allowed_keys(
                 context_table,
                 MANIFEST_V3_CONTEXT_KEYS,
@@ -551,13 +606,92 @@ class TeamValidator:
                     elif path is not None and not path.is_file():
                         self.error(f"project artifact must be a file: {raw_path}")
 
+    def validate_persistent_orchestration(self) -> None:
+        """Require the durable project bridge introduced by manifest schema v4."""
+        if self.scope == "personal":
+            self.persistent_orchestration_status = (
+                "NOT_APPLICABLE_GLOBAL_ROLE_LIBRARY"
+            )
+            return
+        if self.manifest_schema_version in {1, 2, 3}:
+            self.persistent_orchestration_status = "LEGACY_UNVERIFIED"
+            return
+
+        override_path = self.root / "AGENTS.override.md"
+        agents_md_path = self.root / "AGENTS.md"
+        if override_path.is_symlink():
+            self.persistent_orchestration_status = "FAIL"
+            self.persistent_orchestration_source = override_path
+            self.error(
+                f"project AGENTS.override.md must not be a symbolic link: {override_path}"
+            )
+            return
+        if override_path.is_file():
+            try:
+                if override_path.read_text(encoding="utf-8").strip():
+                    agents_md_path = override_path
+            except OSError as exc:
+                self.persistent_orchestration_status = "FAIL"
+                self.persistent_orchestration_source = override_path
+                self.error(f"project AGENTS.override.md cannot be read: {exc}")
+                return
+        self.persistent_orchestration_source = agents_md_path
+        self.checked_files.add(agents_md_path)
+        symlink = self.find_symlink_component(agents_md_path, base=self.root)
+        if symlink is not None:
+            self.persistent_orchestration_status = "FAIL"
+            self.error(f"project AGENTS.md must not use a symbolic link: {symlink}")
+            return
+        try:
+            content = agents_md_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            self.persistent_orchestration_status = "FAIL"
+            self.error(
+                "an active root AGENTS.md or AGENTS.override.md is required by "
+                f"manifest schema v4: {exc}"
+            )
+            return
+        configured_limit = DEFAULT_PROJECT_DOC_MAX_BYTES
+        if self.find_symlink_component(self.config_path) is None:
+            try:
+                with self.config_path.open("rb") as handle:
+                    raw_limit = tomllib.load(handle).get("project_doc_max_bytes")
+                if isinstance(raw_limit, int) and not isinstance(raw_limit, bool):
+                    configured_limit = raw_limit
+            except (OSError, tomllib.TOMLDecodeError):
+                pass
+        if len(content.encode("utf-8")) > configured_limit:
+            self.persistent_orchestration_status = "FAIL"
+            self.error(
+                f"active project instructions exceed project_doc_max_bytes "
+                f"({configured_limit}): {agents_md_path}"
+            )
+            return
+        start_marker = "<!-- subagent-creator:start -->"
+        end_marker = "<!-- subagent-creator:end -->"
+        if content.count(start_marker) != 1 or content.count(end_marker) != 1:
+            self.persistent_orchestration_status = "FAIL"
+            self.error(
+                "active project instructions must contain exactly one complete "
+                "subagent-creator managed block"
+            )
+            return
+        if PROJECT_AGENTS_MANAGED_BLOCK not in content:
+            self.persistent_orchestration_status = "FAIL"
+            self.error(
+                "active project instructions subagent-creator block does not match the "
+                "schema v4 runtime contract"
+            )
+            return
+        self.persistent_orchestration_status = "PASS"
+
     def validate_orchestration(self, manifest: dict[str, Any]) -> int | None:
         """Validate centralized coordination and return the concurrency cap."""
         orchestration = manifest.get("orchestration")
         if not isinstance(orchestration, dict):
             self.error("manifest.orchestration must be a TOML table")
             return None
-        if self.manifest_schema_version in {2, 3}:
+        if self.manifest_schema_version in {2, 3, 4}:
             self.validate_allowed_keys(
                 orchestration,
                 MANIFEST_V2_ORCHESTRATION_KEYS,
@@ -585,7 +719,7 @@ class TeamValidator:
             if not isinstance(model, dict):
                 self.error(f"{context} must be a TOML table")
                 continue
-            if self.manifest_schema_version in {2, 3}:
+            if self.manifest_schema_version in {2, 3, 4}:
                 self.validate_allowed_keys(model, MANIFEST_V2_MODEL_KEYS, context)
             model_id = self.require_string(model, "id", context)
             availability_source = self.require_string(model, "availability_source", context)
@@ -615,7 +749,6 @@ class TeamValidator:
                     self.manifest_availability_sources.add(availability_source)
             if model_id:
                 model_order.append(model_id)
-                self.required_models.add(model_id)
                 if model_id in result:
                     self.error(f"duplicate model id: {model_id}")
                 else:
@@ -625,11 +758,39 @@ class TeamValidator:
         return result
 
     def validate_runtime_model_availability(self) -> dict[str, Any]:
-        """Report configuration, catalog assertions, and successful probes separately."""
-        available = self.available_models
-        source = self.availability_source
-        probed = self.probed_models
-        probe_source = self.model_probe_source
+        """Report caller assertions and trusted host observations separately."""
+        host_evidence = self.host_model_evidence
+        caller_evidence_supplied = any(
+            value is not None
+            for value in (
+                self.available_models,
+                self.availability_source,
+                self.probed_models,
+                self.model_probe_source,
+            )
+        )
+        if host_evidence is not None:
+            available = set(host_evidence.available_models)
+            source = host_evidence.catalog_source
+            probed = (
+                set(host_evidence.probed_models)
+                if host_evidence.probe_source is not None
+                or host_evidence.probed_models
+                else None
+            )
+            probe_source = host_evidence.probe_source
+            evidence_trust = "host_verified"
+            if caller_evidence_supplied:
+                self.availability_error(
+                    "trusted host model evidence must not be combined with "
+                    "caller-supplied model evidence flags"
+                )
+        else:
+            available = self.available_models
+            source = self.availability_source
+            probed = self.probed_models
+            probe_source = self.model_probe_source
+            evidence_trust = "caller_asserted" if caller_evidence_supplied else "none"
         missing_catalog = (
             sorted(self.required_models - available) if available is not None else []
         )
@@ -638,6 +799,9 @@ class TeamValidator:
         )
         status = "UNVERIFIED"
         evidence_level = "configuration_only"
+
+        if host_evidence is not None and caller_evidence_supplied:
+            status = "FAIL"
 
         catalog_partially_supplied = available is not None or source is not None
         if catalog_partially_supplied:
@@ -662,9 +826,17 @@ class TeamValidator:
                     "models required by the Manifest are absent from the supplied "
                     f"runtime catalog assertion: {missing_catalog}"
                 )
-            else:
-                status = "CALLER_ASSERTED"
-                evidence_level = "runtime_catalog_assertion"
+            elif status != "FAIL":
+                status = (
+                    "HOST_VERIFIED"
+                    if host_evidence is not None
+                    else "CALLER_ASSERTED"
+                )
+                evidence_level = (
+                    "host_runtime_catalog"
+                    if host_evidence is not None
+                    else "runtime_catalog_assertion"
+                )
 
         probe_partially_supplied = probed is not None or probe_source is not None
         if probe_partially_supplied:
@@ -690,12 +862,31 @@ class TeamValidator:
                     f"{missing_probes}"
                 )
             elif status != "FAIL":
-                status = "VERIFIED"
-                evidence_level = "successful_model_probe"
+                status = "VERIFIED" if host_evidence is not None else "CALLER_PROBED"
+                evidence_level = (
+                    "host_successful_model_probe"
+                    if host_evidence is not None
+                    else "caller_reported_successful_model_probe"
+                )
+
+        if self.require_runtime_permissions and status not in {
+            "HOST_VERIFIED",
+            "VERIFIED",
+        }:
+            self.availability_error(
+                "runtime readiness requires a trusted host model catalog covering "
+                "every model referenced by the Manifest"
+            )
+        if self.require_model_verification and status != "VERIFIED":
+            self.availability_error(
+                "AGENT_TEAM_VERIFIED requires trusted successful real-invocation "
+                "probes for every model referenced by the Manifest"
+            )
 
         return {
             "status": status,
             "evidence_level": evidence_level,
+            "evidence_trust": evidence_trust,
             "configuration_usable": not self.errors,
             "declared_sources": sorted(self.manifest_availability_sources),
             "catalog": {
@@ -848,7 +1039,7 @@ class TeamValidator:
         if status == "CALLER_ASSERTED" and self.require_runtime_permissions:
             self.runtime_permission_error(
                 "caller-asserted runtime permission evidence cannot satisfy strict "
-                "AGENT_TEAM_READY verification; a trusted host adapter must provide "
+                "AGENT_TEAM_RUNTIME_READY verification; a trusted host adapter must provide "
                 "HostPermissionEvidence"
             )
 
@@ -868,17 +1059,35 @@ class TeamValidator:
 
     def validate_runtime_codex_compatibility(self) -> dict[str, Any]:
         """Classify the observed Codex version against the reviewed schema window."""
-        raw_version = self.codex_version
-        source = self.codex_version_source
+        host_evidence = self.host_codex_version_evidence
+        caller_evidence_supplied = (
+            self.codex_version is not None or self.codex_version_source is not None
+        )
+        if host_evidence is not None:
+            raw_version = host_evidence.version
+            source = host_evidence.source
+            evidence_trust = "host_verified"
+        else:
+            raw_version = self.codex_version
+            source = self.codex_version_source
+            evidence_trust = (
+                "caller_asserted" if caller_evidence_supplied else "none"
+            )
         parsed = parse_codex_version(raw_version) if raw_version is not None else None
         status = "UNVERIFIED"
         evidence_supplied = raw_version is not None or source is not None
 
-        if not evidence_supplied:
+        if host_evidence is not None and caller_evidence_supplied:
+            status = "MISMATCH"
+            self.codex_compatibility_error(
+                "trusted host Codex version evidence must not be combined with "
+                "caller-supplied version flags"
+            )
+        elif not evidence_supplied:
             if self.require_runtime_permissions:
                 self.codex_compatibility_error(
-                    "Codex runtime version evidence was not supplied; host-readiness "
-                    "verification requires --codex-version and --codex-version-source"
+                    "Codex runtime version evidence was not supplied; runtime readiness "
+                    "requires HostCodexVersionEvidence from a trusted host adapter"
                 )
         elif raw_version is None or source is None:
             self.codex_compatibility_error(
@@ -896,7 +1105,11 @@ class TeamValidator:
                 "a value such as 'codex-cli 0.147.0'"
             )
         else:
-            status = "VERIFIED"
+            status = (
+                "HOST_VERIFIED"
+                if host_evidence is not None
+                else "CALLER_ASSERTED"
+            )
             core = parsed["core"]
             prerelease = parsed["prerelease"]
             if core < MINIMUM_CODEX_VERSION or (
@@ -917,9 +1130,17 @@ class TeamValidator:
                     "contract, validator, and tests before generating target Agent files"
                 )
 
+        if status == "CALLER_ASSERTED" and self.require_runtime_permissions:
+            self.codex_compatibility_error(
+                "caller-asserted Codex version evidence cannot satisfy strict "
+                "AGENT_TEAM_RUNTIME_READY verification; a trusted host adapter must "
+                "provide HostCodexVersionEvidence"
+            )
+
         return {
             "status": status,
-            "required_for_host_readiness": self.require_runtime_permissions,
+            "required_for_runtime_readiness": self.require_runtime_permissions,
+            "evidence_trust": evidence_trust,
             "source": source,
             "observed": raw_version,
             "normalized_version": parsed["normalized"] if parsed is not None else None,
@@ -937,8 +1158,29 @@ class TeamValidator:
         expanded = Path(raw_path).expanduser()
         path = expanded if expanded.is_absolute() else self.manifest_path_base / expanded
         skill_file = path if path.name == "SKILL.md" else path / "SKILL.md"
+        if expanded.is_absolute():
+            symlink = path if path.is_symlink() else skill_file if skill_file.is_symlink() else None
+        else:
+            symlink = self.find_symlink_component(
+                skill_file,
+                base=self.managed_root,
+            )
+        if symlink is not None:
+            self.error(f"{context} must not use a symbolic link: {symlink}")
+            return
         if not skill_file.is_file():
             self.error(f"{context} does not resolve to a Skill: {raw_path}")
+            return
+        if self.scope == "personal":
+            try:
+                skill_file.resolve().relative_to(self.root)
+            except ValueError:
+                pass
+            else:
+                self.error(
+                    f"{context} for a global Agent must not bind a "
+                    f"project-internal Skill path: {raw_path}"
+                )
 
     def validate_custom_agent_schema(
         self,
@@ -1063,6 +1305,16 @@ class TeamValidator:
             self.error(f"{context}.file developer_instructions must be non-empty")
         else:
             sections = self.validate_developer_instructions(instructions, context)
+            escalation_text = sections.get("escalation", "")
+            if not re.search(
+                r"(?:\bmain\b|主\s*Agent|主智能体)",
+                escalation_text,
+                re.IGNORECASE,
+            ):
+                self.error(
+                    f"{context}.file Escalation: must route blocked or failed "
+                    "work back to the main Agent"
+                )
         configured_skills: list[str] = []
         skill_table = config.get("skills")
         if isinstance(skill_table, dict):
@@ -1104,7 +1356,7 @@ class TeamValidator:
             if not isinstance(agent, dict):
                 self.error(f"{context} must be a TOML table")
                 continue
-            if self.manifest_schema_version in {2, 3}:
+            if self.manifest_schema_version in {2, 3, 4}:
                 self.validate_allowed_keys(agent, MANIFEST_V2_AGENT_KEYS, context)
             name = self.require_string(agent, "name", context)
             raw_file = self.require_string(agent, "file", context)
@@ -1137,25 +1389,61 @@ class TeamValidator:
                 self.error(f"{context}.cost_tier is invalid: {cost_tier}")
             model_id = self.require_string(agent, "model", context)
             effort = self.require_string(agent, "model_reasoning_effort", context)
-            escalation_model = self.require_string(agent, "escalation_model", context)
-            escalation_effort = self.require_string(agent, "escalation_reasoning_effort", context)
+            escalation_model_value = agent.get("escalation_model")
+            escalation_effort_value = agent.get("escalation_reasoning_effort")
+            escalation_model: str | None
+            escalation_effort: str | None
+            if self.manifest_schema_version == 4:
+                if (escalation_model_value is None) != (
+                    escalation_effort_value is None
+                ):
+                    self.error(
+                        f"{context}.escalation_model and "
+                        "escalation_reasoning_effort must be supplied together"
+                    )
+                escalation_model = (
+                    self.require_string(agent, "escalation_model", context)
+                    if escalation_model_value is not None
+                    else None
+                )
+                escalation_effort = (
+                    self.require_string(
+                        agent,
+                        "escalation_reasoning_effort",
+                        context,
+                    )
+                    if escalation_effort_value is not None
+                    else None
+                )
+            else:
+                escalation_model = self.require_string(
+                    agent,
+                    "escalation_model",
+                    context,
+                )
+                escalation_effort = self.require_string(
+                    agent,
+                    "escalation_reasoning_effort",
+                    context,
+                )
             self.validate_model_assignment(model_id, effort, cost_tier, models, context, "default")
-            self.validate_model_assignment(
-                escalation_model,
-                escalation_effort,
-                None,
-                models,
-                context,
-                "escalation",
-            )
-            self.validate_escalation_strength(
-                model_id,
-                effort,
-                escalation_model,
-                escalation_effort,
-                models,
-                context,
-            )
+            if escalation_model is not None or escalation_effort is not None:
+                self.validate_model_assignment(
+                    escalation_model,
+                    escalation_effort,
+                    None,
+                    models,
+                    context,
+                    "escalation",
+                )
+                self.validate_escalation_strength(
+                    model_id,
+                    effort,
+                    escalation_model,
+                    escalation_effort,
+                    models,
+                    context,
+                )
             skills = agent.get("skills") if isinstance(agent.get("skills"), list) else []
             for skill_index, skill_path in enumerate(skills):
                 if isinstance(skill_path, str):
@@ -1264,6 +1552,8 @@ class TeamValidator:
         assignment: str,
     ) -> None:
         """Check that an Agent assignment is supported by the model registry."""
+        if model_id:
+            self.assigned_models.add(model_id)
         if not model_id or model_id not in models:
             if model_id:
                 self.error(f"{context}.{assignment} model is absent from the registry: {model_id}")
@@ -1388,6 +1678,16 @@ class TeamValidator:
 
     def validate(self) -> dict[str, Any]:
         """Run all checks and return a JSON-serializable report."""
+        if self.requested_root.is_symlink():
+            self.error(
+                "project/context root must not be a symbolic link: "
+                f"{self.requested_root}"
+            )
+        if self.scope == "personal" and self.codex_home is not None:
+            if self.codex_home.is_symlink():
+                self.error(
+                    f"Codex home must not be a symbolic link: {self.codex_home}"
+                )
         if self.scope not in VALID_SCOPES:
             self.error(f"scope must be one of {sorted(VALID_SCOPES)}, got: {self.scope}")
         manifest = self.load_toml(self.manifest_path, "Agent Team Manifest")
@@ -1410,7 +1710,7 @@ class TeamValidator:
                     MANIFEST_V2_TOP_LEVEL_KEYS,
                     "manifest",
                 )
-            elif self.manifest_schema_version == 3:
+            elif self.manifest_schema_version in {3, 4}:
                 self.validate_allowed_keys(
                     manifest,
                     MANIFEST_V3_TOP_LEVEL_KEYS,
@@ -1423,34 +1723,59 @@ class TeamValidator:
                 self.error("manifest.status must be 'ready'")
             self.validate_rfc3339_timestamp(manifest, "last_changed_at", "manifest")
             self.validate_context(manifest)
+            self.validate_persistent_orchestration()
             concurrency = self.validate_orchestration(manifest)
             models = self.validate_models(manifest)
             self.validate_agents(manifest, models)
+            unused_models = sorted(set(models) - self.assigned_models)
+            if unused_models:
+                self.error(
+                    "manifest.model_registry.models contains models not assigned as "
+                    f"a default or optional escalation: {unused_models}"
+                )
+            self.required_models = set(self.assigned_models)
             self.validate_cross_scope_conflicts()
             self.validate_scope_config(concurrency)
         availability = self.validate_runtime_model_availability()
         runtime_permissions = self.validate_runtime_permissions()
         runtime_codex_compatibility = self.validate_runtime_codex_compatibility()
         fingerprint = self.fingerprint()
+        configuration_ready = not self.errors
+        runtime_ready = (
+            configuration_ready
+            and not self.availability_errors
+            and self.scope == "project"
+            and self.persistent_orchestration_status == "PASS"
+            and availability["status"] in {"HOST_VERIFIED", "VERIFIED"}
+            and runtime_permissions["status"] == "HOST_VERIFIED"
+            and runtime_codex_compatibility["status"] == "HOST_VERIFIED"
+        )
+        fully_verified = runtime_ready and availability["status"] == "VERIFIED"
+        if fully_verified:
+            readiness_status = "AGENT_TEAM_VERIFIED"
+        elif runtime_ready:
+            readiness_status = "AGENT_TEAM_RUNTIME_READY"
+        elif configuration_ready:
+            readiness_status = "AGENT_TEAM_CONFIGURATION_READY"
+        else:
+            readiness_status = "BLOCKED_BY_CONFIGURATION"
+        if self.require_model_verification and not fully_verified:
+            self.readiness_errors.append(
+                "requested AGENT_TEAM_VERIFIED but the verified readiness Gate "
+                "was not satisfied"
+            )
+        elif self.require_runtime_permissions and not runtime_ready:
+            self.readiness_errors.append(
+                "requested AGENT_TEAM_RUNTIME_READY but the runtime readiness Gate "
+                "was not satisfied"
+            )
         all_errors = [
             *self.errors,
             *self.availability_errors,
             *self.runtime_permission_errors,
             *self.codex_compatibility_errors,
+            *self.readiness_errors,
         ]
-        configuration_ready = not self.errors
-        fully_ready = (
-            configuration_ready
-            and not self.availability_errors
-            and runtime_permissions["status"] == "HOST_VERIFIED"
-            and runtime_codex_compatibility["status"] == "VERIFIED"
-        )
-        if fully_ready:
-            readiness_status = "AGENT_TEAM_READY"
-        elif configuration_ready:
-            readiness_status = "AGENT_TEAM_CONFIGURATION_READY"
-        else:
-            readiness_status = "BLOCKED_BY_CONFIGURATION"
         return {
             "status": "PASS" if not all_errors else "FAIL",
             "configuration_status": "PASS" if not self.errors else "FAIL",
@@ -1463,6 +1788,15 @@ class TeamValidator:
             "runtime_model_availability": availability,
             "runtime_permissions": runtime_permissions,
             "runtime_codex_compatibility": runtime_codex_compatibility,
+            "persistent_orchestration": {
+                "status": self.persistent_orchestration_status,
+                "source": (
+                    str(self.persistent_orchestration_source)
+                    if self.persistent_orchestration_source is not None
+                    else None
+                ),
+                "source_of_truth": str(self.manifest_path),
+            },
             "root": str(self.root),
             "scope": {
                 "requested": self.scope,
@@ -1581,7 +1915,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--model-probe-source",
         choices=sorted(VALID_MODEL_PROBE_SOURCES),
-        help="Trusted source for models successfully invoked during this run",
+        help="Caller-reported source for models successfully invoked during this run",
     )
     parser.add_argument(
         "--probed-model",
@@ -1621,24 +1955,34 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Caller-reported approval policy for one Agent; repeat once per Agent",
     )
     parser.add_argument(
+        "--require-runtime-readiness",
         "--require-host-readiness",
         "--require-runtime-permissions",
         dest="require_runtime_permissions",
         action="store_true",
         help=(
-            "Require the optional AGENT_TEAM_READY host enhancement: HOST_VERIFIED "
-            "permissions and a compatible observed Codex runtime. CLI permission "
-            "assertions intentionally cannot satisfy this strict mode"
+            "Require AGENT_TEAM_RUNTIME_READY: durable project wiring, a trusted "
+            "host model catalog, HOST_VERIFIED permissions, and a compatible "
+            "Codex runtime. CLI assertions cannot satisfy this strict mode"
+        ),
+    )
+    parser.add_argument(
+        "--require-verification",
+        dest="require_model_verification",
+        action="store_true",
+        help=(
+            "Require AGENT_TEAM_VERIFIED, including trusted successful real "
+            "invocations for every referenced model"
         ),
     )
     parser.add_argument(
         "--codex-version",
-        help="Exact output of codex --version or the equivalent current host runtime value",
+        help="Caller-reported output of codex --version or an equivalent runtime value",
     )
     parser.add_argument(
         "--codex-version-source",
         choices=sorted(VALID_CODEX_VERSION_SOURCES),
-        help="Independent source that exposed the current Codex runtime version",
+        help="Caller-reported source that exposed the current Codex runtime version",
     )
     parser.add_argument("--json", action="store_true", help="Emit the validation report as JSON")
     args = parser.parse_args(argv)
@@ -1676,6 +2020,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_runtime_approval_policies=args.agent_runtime_approval_policies,
         permission_evidence_source=args.permission_evidence_source,
         require_runtime_permissions=args.require_runtime_permissions,
+        require_model_verification=args.require_model_verification,
         codex_version=args.codex_version,
         codex_version_source=args.codex_version_source,
     )
@@ -1694,7 +2039,8 @@ def main(argv: list[str] | None = None) -> int:
             f"{report['local_codex_schema']['status']}; runtime model availability: "
             f"{report['runtime_model_availability']['status']}; runtime permissions: "
             f"{report['runtime_permissions']['status']}; Codex compatibility: "
-            f"{report['runtime_codex_compatibility']['status']}"
+            f"{report['runtime_codex_compatibility']['status']}; persistent "
+            f"orchestration: {report['persistent_orchestration']['status']}"
         )
         for error in validator.errors:
             print(f"ERROR: {error}")
@@ -1704,6 +2050,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"RUNTIME_PERMISSION_ERROR: {error}")
         for error in validator.codex_compatibility_errors:
             print(f"CODEX_COMPATIBILITY_ERROR: {error}")
+        for error in validator.readiness_errors:
+            print(f"READINESS_ERROR: {error}")
     if report["status"] == "PASS":
         print("Validation complete. No files were changed.", file=sys.stderr)
         return 0

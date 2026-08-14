@@ -16,7 +16,12 @@ SKILL_SCRIPTS = PROJECT_ROOT / "skills" / "subagent-creator" / "scripts"
 FIXTURE_ROOT = PROJECT_ROOT / "tests" / "fixtures" / "representative_team"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 
-from validate_team import HostPermissionEvidence, TeamValidator  # noqa: E402
+from validate_team import (  # noqa: E402
+    HostCodexVersionEvidence,
+    HostModelEvidence,
+    HostPermissionEvidence,
+    TeamValidator,
+)
 
 
 def fixture_hashes() -> dict[str, str]:
@@ -53,8 +58,12 @@ class RepresentativeTeamFixtureTests(unittest.TestCase):
             shutil.rmtree(root / "retired")
 
             validator_options = {
-                "available_models": {"economy-model", "strong-model"},
-                "availability_source": "runtime_model_registry",
+                "host_model_evidence": HostModelEvidence(
+                    catalog_source="runtime_model_registry",
+                    available_models=frozenset(
+                        {"economy-model", "strong-model"}
+                    ),
+                ),
                 "host_permission_evidence": HostPermissionEvidence(
                     source="spawn_session_metadata",
                     agent_sandboxes={
@@ -68,9 +77,11 @@ class RepresentativeTeamFixtureTests(unittest.TestCase):
                     parent_sandbox="workspace-write",
                     parent_approval_policy="on-request",
                 ),
+                "host_codex_version_evidence": HostCodexVersionEvidence(
+                    source="codex_cli",
+                    version="codex-cli 0.147.0",
+                ),
                 "require_runtime_permissions": True,
-                "codex_version": "codex-cli 0.147.0",
-                "codex_version_source": "codex_cli",
             }
             first = TeamValidator(root, **validator_options).validate()
             second = TeamValidator(root, **validator_options).validate()
@@ -79,10 +90,10 @@ class RepresentativeTeamFixtureTests(unittest.TestCase):
             self.assertEqual(first["configuration_status"], "PASS")
             self.assertEqual(
                 first["runtime_model_availability"]["status"],
-                "CALLER_ASSERTED",
+                "HOST_VERIFIED",
             )
             self.assertEqual(first["runtime_permissions"]["status"], "HOST_VERIFIED")
-            self.assertEqual(first["readiness_status"], "AGENT_TEAM_READY")
+            self.assertEqual(first["readiness_status"], "AGENT_TEAM_RUNTIME_READY")
             self.assertEqual(
                 {
                     agent["name"]: agent["observed_effective"]["sandbox_mode"]

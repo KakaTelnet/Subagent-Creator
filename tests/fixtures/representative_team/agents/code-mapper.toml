@@ -16,5 +16,5 @@ Inputs:
 Outputs:
 - Evidence map with exact file references
 Escalation:
-- Conflicting architecture artifacts
+- Return conflicting architecture artifacts to the main Agent
 """

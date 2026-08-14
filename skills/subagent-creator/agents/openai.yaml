@@ -1,4 +1,4 @@
 interface:
   display_name: "Subagent Creator"
-  short_description: "默认创建项目级、可选全局的多模型子 Agent"
-  default_prompt: "Use $subagent-creator to design and configure the minimal sufficient project-scoped Codex subagent team by default; create global Agents only when I explicitly request them."
+  short_description: "创建项目级持久团队或显式全局角色库"
+  default_prompt: "Use $subagent-creator to configure a minimal persistent project team, or a global role library only when I explicitly request global Agents."
