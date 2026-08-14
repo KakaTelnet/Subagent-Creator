@@ -18,6 +18,7 @@ Load only the reference needed for the current operation:
 - Read [Team Design Guide](references/team-design.md) when creating a team, changing team shape or routing, auditing whether roles remain minimal and correctly separated, or explaining role separation, merging, model, permission, and routing criteria.
 - Read [Agent Team Contract](references/agent-team-contract.md) before creating, updating, retiring, or validating team files; when auditing scope, schema, ownership, path safety, persistent wiring, or idempotency; or when explaining generated files and their lifecycle.
 - Read [Runtime Readiness](references/runtime-readiness.md) only when external model, permission, probe, or Codex-version evidence is supplied; when readiness above configuration-ready is requested; when explaining readiness levels or evidence trust; or when changing evidence/readiness behavior.
+- Read [Goal Execution Handoff](references/goal-execution-handoff.md) only after a successful project-scoped `CREATE` or `UPDATE` has a managed team, configuration-ready or stronger evidence, and one stable implementation plan; append its copyable `/goal` prompt without starting product work. Do not read or emit it for other outcomes or global scope.
 - Execute `scripts/validate_team.py` without reading its source. Read the script only to debug or change validator behavior.
 
 For a general explanation that does not depend on team-design, file-contract, or runtime-readiness details, do not load references unnecessarily.
@@ -87,5 +88,7 @@ Return a concise, verifiable summary containing:
 - evidence trust levels and relevant gaps;
 - exact changed files and any validation commands/results;
 - preserved unrelated worktree changes.
+
+For an eligible successful project team, append the Goal Execution Handoff after the verification summary, replace only its implementation-plan placeholder when the authoritative path is known, and leave Goal creation and execution to the user's next request.
 
 Never claim that product implementation, tests, or final acceptance passed merely because the Agent Team configuration is ready.

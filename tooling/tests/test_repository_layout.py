@@ -120,6 +120,7 @@ class RepositoryLayoutTests(unittest.TestCase):
             "SKILL.md",
             "agents/openai.yaml",
             "references/agent-team-contract.md",
+            "references/goal-execution-handoff.md",
             "references/runtime-readiness.md",
             "references/team-design.md",
             "scripts/validate_team.py",
@@ -135,7 +136,12 @@ class RepositoryLayoutTests(unittest.TestCase):
         skill_path = SKILL_ROOT / "SKILL.md"
         content = skill_path.read_text(encoding="utf-8")
         self.assertRegex(content, r"(?m)^name: subagent-creator$")
-        for label in ("Team Design Guide", "Agent Team Contract", "Runtime Readiness"):
+        for label in (
+            "Team Design Guide",
+            "Agent Team Contract",
+            "Runtime Readiness",
+            "Goal Execution Handoff",
+        ):
             match = re.search(rf"\[{label}\]\(([^)]+)\)", content)
             self.assertIsNotNone(match, label)
             reference = SKILL_ROOT / match.group(1)
@@ -176,6 +182,7 @@ class RepositoryLayoutTests(unittest.TestCase):
 
         for reference_name in (
             "agent-team-contract.md",
+            "goal-execution-handoff.md",
             "runtime-readiness.md",
             "team-design.md",
         ):
@@ -184,6 +191,35 @@ class RepositoryLayoutTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
             if len(reference.splitlines()) > 100:
                 self.assertIn("## Contents", reference, reference_name)
+
+    def test_successful_project_team_emits_goal_execution_handoff(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        handoff = (
+            SKILL_ROOT / "references" / "goal-execution-handoff.md"
+        ).read_text(encoding="utf-8")
+        readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+
+        for expected in (
+            "only after a successful project-scoped `CREATE` or `UPDATE`",
+            "append its copyable `/goal` prompt without starting product work",
+            "Do not read or emit it for other outcomes or global scope",
+            "leave Goal creation and execution to the user's next request",
+        ):
+            self.assertIn(expected, skill)
+
+        for expected in (
+            "AGENT_TEAM_CONFIGURATION_READY",
+            "Do not emit this handoff for `EXPLAIN`, `AUDIT`, global role libraries",
+            "/goal 严格按照 <实现计划文件路径>",
+            ".codex/agent-team.toml",
+            "invoke_when",
+            "Subagent 不得 commit、push、创建 PR、merge 或发布",
+            "只有满足以上全部条件，才能将 GOAL 标记为 complete",
+            "https://learn.chatgpt.com/use-cases/follow-goals",
+        ):
+            self.assertIn(expected, handoff)
+
+        self.assertIn("可复制的 `/goal` 实现推进提示词", readme)
 
     def test_skill_description_is_trigger_oriented(self) -> None:
         content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
