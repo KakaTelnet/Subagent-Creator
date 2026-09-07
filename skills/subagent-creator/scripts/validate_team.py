@@ -36,6 +36,14 @@ PROJECT_AGENTS_MANAGED_BLOCK = """<!-- subagent-creator:start -->
 - The main Agent owns dispatch and final decisions; Subagents return results and do not dispatch follow-up work.
 - Product requirements may only be changed by the main Agent with user authority.
 <!-- subagent-creator:end -->"""
+OPTIONAL_DISPATCH_POLICY = """### Cost-aware dispatch policy
+
+- Before doing matching work, select an existing custom Agent using the team manifest and native role configuration.
+- For explicit inputs, established rules, and easily verifiable outputs, prefer the lowest-cost capable role using the configured cost tiers; do not infer measured savings from those tiers.
+- Use the selected native custom role, not a generic Agent with the same name or copied instructions; report an unavailable role or model before choosing a fallback.
+- The main Agent owns requirements, bounded assignments, exceptions, escalation, and final acceptance; follow the team's concurrency, serialization, and permission constraints.
+- Return rule exceptions, conflicting evidence, and out-of-scope work to the main Agent; do not silently upgrade models or permissions.
+- Explain skipped matching delegation and avoid repeating completed work without a verification reason. Report observed role/session/model evidence when available; mark missing evidence unverified and never claim actual low-cost execution from configuration alone."""
 DEFAULT_PROJECT_DOC_MAX_BYTES = 32 * 1024
 VALID_CAPABILITY_TIERS = {"strong", "balanced", "throughput"}
 VALID_COST_TIERS = {"high", "medium", "low"}
@@ -54,10 +62,12 @@ VALID_MODEL_CATALOG_SOURCES = {
 }
 VALID_MODEL_PROBE_SOURCES = {"successful_model_probe"}
 VALID_PERMISSION_EVIDENCE_SOURCES = {"host_runtime", "spawn_session_metadata"}
-VALID_APPROVAL_POLICIES = {"granular", "never", "on-request", "untrusted"}
+LEGACY_APPROVAL_POLICIES = {"granular", "never", "on-request", "untrusted"}
+CURRENT_APPROVAL_POLICIES = {"granular", "never", "on-request"}
 VALID_CODEX_VERSION_SOURCES = {"codex_cli", "host_runtime"}
 MINIMUM_CODEX_VERSION = (0, 145, 0)
-MAXIMUM_REVIEWED_CODEX_SERIES = (0, 147)
+MAXIMUM_REVIEWED_CODEX_SERIES = (0, 153)
+CODEX_0153_MINIMUM_VERSION = (0, 153, 0)
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 RFC3339_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
@@ -676,7 +686,13 @@ class TeamValidator:
                 "subagent-creator managed block"
             )
             return
-        if PROJECT_AGENTS_MANAGED_BLOCK not in content:
+        managed_block = content[
+            content.index(start_marker) : content.index(end_marker) + len(end_marker)
+        ]
+        extended_block = PROJECT_AGENTS_MANAGED_BLOCK.replace(
+            end_marker, f"\n{OPTIONAL_DISPATCH_POLICY}\n{end_marker}"
+        )
+        if managed_block not in (PROJECT_AGENTS_MANAGED_BLOCK, extended_block):
             self.persistent_orchestration_status = "FAIL"
             self.error(
                 "active project instructions subagent-creator block does not match the "
@@ -903,8 +919,23 @@ class TeamValidator:
             "errors": list(self.availability_errors),
         }
 
+    def runtime_approval_policies(self) -> set[str]:
+        """Return approval policies accepted by the observed Codex runtime.
+
+        Codex 0.153.0 removed the legacy ``untrusted`` value from its public
+        approval-policy schema. Without a version observation, retain the
+        legacy set for configuration-only and older-runtime validation.
+        """
+        host_evidence = self.host_codex_version_evidence
+        raw_version = host_evidence.version if host_evidence is not None else self.codex_version
+        parsed = parse_codex_version(raw_version) if raw_version is not None else None
+        if parsed is not None and parsed["core"] >= CODEX_0153_MINIMUM_VERSION:
+            return CURRENT_APPROVAL_POLICIES
+        return LEGACY_APPROVAL_POLICIES
+
     def validate_runtime_permissions(self) -> dict[str, Any]:
         """Validate each Agent's observed effective permissions independently."""
+        accepted_approval_policies = self.runtime_approval_policies()
         host_evidence = self.host_permission_evidence
         caller_evidence_supplied = any(
             value is not None
@@ -965,12 +996,12 @@ class TeamValidator:
             )
         if (
             parent_approval_policy is not None
-            and parent_approval_policy not in VALID_APPROVAL_POLICIES
+            and parent_approval_policy not in accepted_approval_policies
         ):
             status = "MISMATCH"
             self.runtime_permission_error(
                 "observed parent approval policy must be one of "
-                f"{sorted(VALID_APPROVAL_POLICIES)}, got: {parent_approval_policy}"
+                f"{sorted(accepted_approval_policies)}, got: {parent_approval_policy}"
             )
 
         unexpected_names = sorted(evidence_names - configured_names)
@@ -1008,12 +1039,12 @@ class TeamValidator:
                     f"Agent {name} observed sandbox must be one of "
                     f"{sorted(VALID_SANDBOXES)}, got: {observed_sandbox}"
                 )
-            elif observed_approval_policy not in VALID_APPROVAL_POLICIES:
+            elif observed_approval_policy not in accepted_approval_policies:
                 comparison_status = "MISMATCH"
                 status = "MISMATCH"
                 self.runtime_permission_error(
                     f"Agent {name} observed approval policy must be one of "
-                    f"{sorted(VALID_APPROVAL_POLICIES)}, got: {observed_approval_policy}"
+                    f"{sorted(accepted_approval_policies)}, got: {observed_approval_policy}"
                 )
             elif observed_sandbox != configured_sandbox:
                 comparison_status = "MISMATCH"
@@ -1052,6 +1083,7 @@ class TeamValidator:
                 "sandbox_mode": parent_sandbox,
                 "approval_policy": parent_approval_policy,
             },
+            "accepted_approval_policies": sorted(accepted_approval_policies),
             "agents": agents,
             "behavioral_boundary_enforcement": "developer_instructions_only",
             "errors": list(self.runtime_permission_errors),
@@ -1102,7 +1134,7 @@ class TeamValidator:
         elif parsed is None:
             self.codex_compatibility_error(
                 f"Codex runtime version is not parseable: {raw_version!r}; expected "
-                "a value such as 'codex-cli 0.147.0'"
+                "a value such as 'codex-cli 0.153.4'"
             )
         else:
             status = (
@@ -1676,6 +1708,40 @@ class TeamValidator:
         elif concurrency is not None and cap != concurrency:
             self.error(f"{self.scope} config concurrency does not match the manifest")
 
+        features = config.get("features")
+        multi_agent_v2 = features.get("multi_agent_v2") if isinstance(features, dict) else None
+        if multi_agent_v2 is True or isinstance(multi_agent_v2, dict):
+            v2_enabled = not isinstance(multi_agent_v2, dict) or multi_agent_v2.get(
+                "enabled", True
+            )
+            if v2_enabled:
+                v2_cap = (
+                    multi_agent_v2.get("max_concurrent_threads_per_session")
+                    if isinstance(multi_agent_v2, dict)
+                    else None
+                )
+                expected_v2_cap = cap + 1 if isinstance(cap, int) and not isinstance(cap, bool) else None
+                if v2_cap is None:
+                    self.error(
+                        f"{self.config_path} enables features.multi_agent_v2 without an "
+                        "explicit max_concurrent_threads_per_session; set it to the "
+                        "Manifest concurrency plus one because V2 counts the primary thread"
+                    )
+                elif (
+                    not isinstance(v2_cap, int)
+                    or isinstance(v2_cap, bool)
+                    or v2_cap < 1
+                ):
+                    self.schema_error(
+                        f"{self.config_path} features.multi_agent_v2."
+                        "max_concurrent_threads_per_session must be a positive integer"
+                    )
+                elif expected_v2_cap is not None and v2_cap != expected_v2_cap:
+                    self.error(
+                        f"{self.scope} V2 concurrency {v2_cap} does not match the "
+                        f"Manifest spawned-agent concurrency {cap} plus one primary thread"
+                    )
+
     def validate(self) -> dict[str, Any]:
         """Run all checks and return a JSON-serializable report."""
         if self.requested_root.is_symlink():
@@ -1930,7 +1996,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--runtime-approval-policy",
-        choices=sorted(VALID_APPROVAL_POLICIES),
+        choices=sorted(LEGACY_APPROVAL_POLICIES),
         help="Caller-reported parent approval policy, retained as context only",
     )
     parser.add_argument(

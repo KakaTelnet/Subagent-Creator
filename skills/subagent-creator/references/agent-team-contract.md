@@ -11,6 +11,7 @@
 - [7. Ownership and lifecycle](#7-ownership-and-lifecycle)
 - [8. Path safety and idempotency](#8-path-safety-and-idempotency)
 - [9. Configuration validation Gate](#9-configuration-validation-gate)
+- [10. Post-creation Prompt suggestion](#10-post-creation-prompt-suggestion)
 
 ## 1. When to read this contract
 
@@ -82,6 +83,12 @@ Only emitted native fields from the validator's strict offline projection are al
 `developer_instructions` contains five non-empty sections: `Responsibilities:`, `Boundaries:`, `Inputs:`, `Outputs:`, and `Escalation:`. Escalation returns blocked or failed work to the main Agent. Behavioral prose lives only here, not in the Manifest.
 
 Skill paths must resolve to an existing `SKILL.md` and match the Manifest. A global Agent cannot bind a Skill internal to the context project.
+
+On Codex `0.153.4`, custom Agent role application inherits the parent turn's
+effective permission profile. `sandbox_mode` remains a valid native field and
+is recorded as the configured default, but it is not proof of a distinct child
+sandbox. A project that requires mixed per-role operating-system sandboxes
+must remain blocked until trusted host evidence demonstrates that separation.
 
 ## 4. Manifest schema
 
@@ -170,6 +177,14 @@ The concurrency value matches the Manifest and counts spawned Agents, not the ma
 
 Modify only required `[agents]` scalars while preserving every unrelated user setting. The validator accepts only its reviewed projection for generated Agent settings and checks types and positive concurrency.
 
+Codex `0.153.4` keeps this `[agents]` value as the spawned-agent cap. If the
+user configuration explicitly enables `[features.multi_agent_v2]`, its
+`max_concurrent_threads_per_session` counts the primary thread as well and
+must equal the Manifest cap plus one; the validator checks this relationship
+without rewriting the user's feature setting. Current Codex versions accept
+`on-request`, `never`, and host-normalized `granular` approval policies;
+`untrusted` is a legacy value supported only by the older reviewed window.
+
 ## 6. Persistent project wiring
 
 Project Manifest v4 requires a managed block in the active root instruction file. A non-empty `AGENTS.override.md` takes precedence over `AGENTS.md`; otherwise update or create `AGENTS.md`. Never write the block only into a shadowed file.
@@ -188,6 +203,8 @@ Project Manifest v4 requires a managed block in the active root instruction file
 ```
 
 Update one complete existing block in place or append one when absent. Half markers, duplicate blocks, or conflicting user content are `BLOCKED_BY_AGENTS_MD_CONFLICT`. The active instruction file must stay within effective `project_doc_max_bytes`, default 32 KiB.
+
+The block may also contain the exact optional dispatch policy from section 10, preceded by one blank line immediately before the end marker. Both the original block and this extended block are valid; the core text is unchanged. CREATE does not add this policy. When reconciling an existing team, preserve whether the policy is present and its exact bytes on every CREATE/UPDATE pass; add or remove it only when the user explicitly requests that rule change. Unknown edits inside the managed block are a conflict, not permission to reset it. Keep unrelated instructions outside the block intact.
 
 Global role libraries never write this block and report `persistent_orchestration.status = NOT_APPLICABLE_GLOBAL_ROLE_LIBRARY`.
 
@@ -248,3 +265,78 @@ Successful normal validation reports top-level `status = PASS`, `configuration_s
 If external evidence is supplied or stricter readiness is requested, read Runtime Readiness and use its interfaces. Invalid optional evidence may fail the overall request while leaving independent configuration status unchanged.
 
 If Python 3.11+ is unavailable, return `BLOCKED_BY_VALIDATION_ENVIRONMENT`, do not write a ready Manifest, and announce no READY state. Never infer product implementation, product tests, or acceptance from this validator.
+
+## 10. Post-creation Prompt suggestion
+
+### Output conditions
+
+After successful CREATE with a managed team, configuration-ready or stronger validation, and a second all-KEEP/zero-diff reconciliation, append **Prompt 建议** to the completion reply. Emit one fenced, copyable prompt selected by the actual project/global scope, preceded by a sentence explaining its impact. UPDATE, EXPLAIN, AUDIT, failed/blocked requests, and NO_AGENT_TEAM_NEEDED do not automatically emit it. Do not require runtime-ready evidence for this suggestion.
+
+Displaying the suggestion does not authorize or execute it. Project creation still installs the required base block; global creation still configures only its role library. Only a subsequent user request to apply the suggested rules authorizes the corresponding instruction update. That follow-up changes instructions only, not team roles, models, permissions, business files, or readiness status.
+
+Before displaying a prompt, replace every angle-bracket placeholder below with the actual absolute path. Use the selected team's manifest and the actual installed contract path, not a repository-development path inferred from memory. Paths are data, not shell commands. The executor must re-read the files and resolve the active instruction source at execution time; do not depend on the phrase “the team just created” or on retained conversation history. Missing or conflicting targets require clarification, not a guessed scope. Adapt the surrounding language to the user.
+
+Show this reminder outside the copyable prompt, beside its scope/impact sentence: **AGENTS.md（或 AGENTS.override.md）变动后，需要重启 Codex 或启动 Codex 的新会话，以加载更新后的规则。** Also show it whenever the current operation actually changes either instruction file, even if no Prompt suggestion is emitted. Deduplicate it when both conditions apply. An unchanged file does not justify saying rules were updated. The follow-up prompts below require the executor to repeat the reminder after an edit; neither creation nor follow-up should restart Codex automatically or claim that the existing session reloaded its instructions.
+
+### Project template
+
+Impact: “此建议用于完善当前项目的调度规则；发送后才执行，不影响全局规则。”
+
+```text
+请完善项目「<absolute-project-root>」的子 Agent 调度规则。
+读取团队清单「<absolute-manifest-path>」、其引用的原生角色配置，以及
+契约「<absolute-contract-path>」第 6、10 节，核实当前项目指令的生效位置。
+仅在该项目当前生效的根 AGENTS.md 或 AGENTS.override.md 中，原位更新
+已有 subagent-creator 调度块：保留完整基础规则，在结束标记前加入契约中
+规定的 Cost-aware dispatch policy 原文；已有该段时保持不变，不重复追加。
+该规则要求按任务匹配原生角色，对规则明确且可验证的工作优先选择能胜任的
+低成本角色，异常返回主 Agent，遵守并发和权限约束，并如实报告执行证据。
+角色和模型以实际团队配置为准；不要复制维护第二份角色表，不调整团队配置。
+保留所有无关内容；清单缺失、基础块缺失或块内存在未知改动时先报告缺口，
+不要重建团队或覆盖冲突。使用项目合规环境运行现有团队验证器，检查差异，
+再次对账确认规则不重复、内容稳定。报告实际修改位置、检查结果及证据限制。
+若本次修改了 AGENTS.md 或 AGENTS.override.md，请在完成回复中明确提醒：
+“AGENTS.md（或 AGENTS.override.md）变动后，需要重启 Codex 或启动 Codex 的新会话，以加载更新后的规则。”
+不要自动重启，也不要声称当前会话已重新加载规则。
+```
+
+### Global template
+
+Impact: “此建议会更新全局调度原则，影响所有项目；发送后才执行。”
+
+```text
+请为 Codex Home「<absolute-codex-home>」配置全局子 Agent 调度原则，
+这次请求授权更新该位置当前生效的 AGENTS.md 或 AGENTS.override.md。
+先读取全局团队清单「<absolute-global-manifest-path>」、其引用的原生角色
+配置，以及契约「<absolute-contract-path>」第 10 节，确认清单属于全局作用域。
+采用契约规定的全局指令块格式与 Cost-aware dispatch policy 原文，新增或
+原位更新一个全局调度块；已有相同内容时保持不变，未知改动先报告冲突。
+要求按需求匹配现有角色，对规则明确且可验证的工作优先选择能胜任的
+低成本角色；项目存在专用团队时结合项目规则选择，不覆盖项目专用约定。
+全局规则仅引用上述全局团队清单，不写入当前项目的路径、业务约束或私有信息，
+不复制维护角色表，也不改角色、模型、权限或项目文件。保留无关全局规则。
+检查指令生效位置、文件差异和重复块，再次对账确认零差异；报告修改范围与
+检查结果，不把规则写入解释为实际调用成功、节省费用或提升团队就绪状态。
+若本次修改了 AGENTS.md 或 AGENTS.override.md，请在完成回复中明确提醒：
+“AGENTS.md（或 AGENTS.override.md）变动后，需要重启 Codex 或启动 Codex 的新会话，以加载更新后的规则。”
+不要自动重启，也不要声称当前会话已重新加载规则。
+```
+
+### Optional dispatch policy and follow-up lifecycle
+
+Use this exact policy in the project extension and global instruction block. Fixed text lets validation preserve the base contract while rejecting accidental edits; the team manifest remains the source of role names and cost tiers.
+
+```markdown
+### Cost-aware dispatch policy
+
+- Before doing matching work, select an existing custom Agent using the team manifest and native role configuration.
+- For explicit inputs, established rules, and easily verifiable outputs, prefer the lowest-cost capable role using the configured cost tiers; do not infer measured savings from those tiers.
+- Use the selected native custom role, not a generic Agent with the same name or copied instructions; report an unavailable role or model before choosing a fallback.
+- The main Agent owns requirements, bounded assignments, exceptions, escalation, and final acceptance; follow the team's concurrency, serialization, and permission constraints.
+- Return rule exceptions, conflicting evidence, and out-of-scope work to the main Agent; do not silently upgrade models or permissions.
+- Explain skipped matching delegation and avoid repeating completed work without a verification reason. Report observed role/session/model evidence when available; mark missing evidence unverified and never claim actual low-cost execution from configuration alone.
+```
+
+For a global follow-up, resolve the first non-empty `AGENTS.override.md`, then `AGENTS.md` in the specified Codex Home; create `AGENTS.md` only when neither supplies instructions. Reject symbolic-link targets or parent components and preserve unrelated content. Use exactly one pair of `<!-- subagent-creator:global-dispatch:start -->` / `<!-- subagent-creator:global-dispatch:end -->` markers around a reference to the resolved global manifest, a sentence giving applicable project-team rules precedence, and the policy above. Report malformed/duplicate markers, unknown block edits, or conflicting user rules instead of overwriting them. Never place project-specific paths or the installed contract path into this reusable global block.
+
+Project follow-ups use the existing project markers and the exact core-plus-policy format from section 6. Global follow-ups are separate user-authorized instruction edits; global team CREATE/UPDATE does not maintain these instructions. Reapplying either suggestion must preserve identical bytes when the facts have not changed. Configuration validation checks project block structure only, not actual delegation, model usage, semantic compliance of surrounding user instructions, or savings. Global role-library validation still reports `NOT_APPLICABLE_GLOBAL_ROLE_LIBRARY` and cannot certify cross-project dispatch.

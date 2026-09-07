@@ -88,4 +88,8 @@ Return a concise, verifiable summary containing:
 - exact changed files and any validation commands/results;
 - preserved unrelated worktree changes.
 
+Only after successful `CREATE`, configuration-ready or stronger validation, and a second all-KEEP/zero-diff reconciliation, append one copyable **Prompt 建议** using [Agent Team Contract](references/agent-team-contract.md#10-post-creation-prompt-suggestion). Select the project or global template from the actual scope and fill in resolved paths. This is a suggestion only: do not execute it or add optional dispatch rules during creation. Do not automatically emit it for `UPDATE`, `EXPLAIN`, `AUDIT`, blocked/failed requests, or `NO_AGENT_TEAM_NEEDED`.
+
+Whenever this operation changes `AGENTS.md` or `AGENTS.override.md`, include a visible completion reminder: **AGENTS.md（或 AGENTS.override.md）变动后，需要重启 Codex 或启动 Codex 的新会话，以加载更新后的规则。** This reminder applies independently of Prompt suggestion eligibility, including UPDATE or a later failure after an instruction edit. Include the same guidance beside each suggestion and require its follow-up executor to repeat it after changing instructions. Do not restart Codex automatically or claim the existing session has reloaded the rules.
+
 Never claim that product implementation, tests, or final acceptance passed merely because the Agent Team configuration is ready.

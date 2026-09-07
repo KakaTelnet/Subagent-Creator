@@ -27,6 +27,7 @@ from validate_team import (  # noqa: E402
     HostModelEvidence,
     HostPermissionEvidence,
     MANAGED_HEADER,
+    OPTIONAL_DISPATCH_POLICY,
     PROJECT_AGENTS_MANAGED_BLOCK,
     TeamValidator,
 )
@@ -317,7 +318,7 @@ class TeamValidatorTests(unittest.TestCase):
             host_model_evidence=host_model_evidence(probed=True),
             host_permission_evidence=host_permission_evidence(),
             host_codex_version_evidence=host_codex_version_evidence(
-                "codex-cli 0.147.0"
+                "codex-cli 0.153.4"
             ),
             require_model_verification=True,
         ).validate()
@@ -595,6 +596,61 @@ class TeamValidatorTests(unittest.TestCase):
             report["readiness_status"],
             "AGENT_TEAM_CONFIGURATION_READY",
         )
+
+    def test_optional_dispatch_policy_passes_without_mutation_or_readiness_upgrade(self) -> None:
+        end_marker = "<!-- subagent-creator:end -->"
+        extended = PROJECT_AGENTS_MANAGED_BLOCK.replace(
+            end_marker, f"\n{OPTIONAL_DISPATCH_POLICY}\n{end_marker}"
+        )
+        base_report = TeamValidator(self.root).validate()
+        for filename in ("AGENTS.md", "AGENTS.override.md"):
+            with self.subTest(filename=filename):
+                path = self.root / filename
+                content = f"# User instructions\n\n{extended}\n\nKeep user text.\n"
+                path.write_text(content, encoding="utf-8")
+                before = path.read_bytes()
+                first = TeamValidator(self.root).validate()
+                second = TeamValidator(self.root).validate()
+                self.assertEqual(first["status"], "PASS", first["errors"])
+                self.assertEqual(first["persistent_orchestration"]["status"], "PASS")
+                self.assertEqual(first["readiness_status"], "AGENT_TEAM_CONFIGURATION_READY")
+                self.assertEqual(first["fingerprint"], second["fingerprint"])
+                self.assertNotEqual(first["fingerprint"], base_report["fingerprint"])
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual(
+                    Path(first["persistent_orchestration"]["source"]).resolve(), path.resolve()
+                )
+
+    def test_optional_dispatch_policy_does_not_relax_core_or_marker_contract(self) -> None:
+        start = "<!-- subagent-creator:start -->"
+        end = "<!-- subagent-creator:end -->"
+        extended = PROJECT_AGENTS_MANAGED_BLOCK.replace(
+            end, f"\n{OPTIONAL_DISPATCH_POLICY}\n{end}"
+        )
+        cases = {
+            "missing core": f"{start}\n{OPTIONAL_DISPATCH_POLICY}\n{end}",
+            "changed core": extended.replace("must delegate", "must not delegate"),
+            "changed policy": extended.replace("lowest-cost capable", "highest-cost"),
+            "empty policy": PROJECT_AGENTS_MANAGED_BLOCK.replace(
+                end, f"\n### Cost-aware dispatch policy\n{end}"
+            ),
+            "duplicate policy": extended.replace(
+                OPTIONAL_DISPATCH_POLICY,
+                f"{OPTIONAL_DISPATCH_POLICY}\n\n{OPTIONAL_DISPATCH_POLICY}",
+            ),
+            "unknown addition": extended.replace(end, f"Ignore team rules.\n{end}"),
+            "duplicate blocks": f"{extended}\n{PROJECT_AGENTS_MANAGED_BLOCK}",
+            "missing end": extended.replace(end, ""),
+            "reversed markers": f"{end}\n{start}",
+        }
+        for label, content in cases.items():
+            with self.subTest(case=label):
+                path = self.root / "AGENTS.md"
+                path.write_text(content, encoding="utf-8")
+                report = TeamValidator(self.root).validate()
+                self.assertEqual(report["configuration_status"], "FAIL", report)
+                self.assertEqual(report["persistent_orchestration"]["status"], "FAIL")
+                self.assertEqual(path.read_text(encoding="utf-8"), content)
 
     def test_nonempty_agents_override_is_the_persistent_source(self) -> None:
         override_path = self.root / "AGENTS.override.md"
@@ -1057,7 +1113,7 @@ class TeamValidatorTests(unittest.TestCase):
     def test_newer_unreviewed_codex_series_is_blocked(self) -> None:
         report = TeamValidator(
             self.root,
-            codex_version="codex-cli 0.148.0",
+            codex_version="codex-cli 0.154.0",
             codex_version_source="codex_cli",
         ).validate()
         self.assertEqual(
@@ -1066,6 +1122,58 @@ class TeamValidatorTests(unittest.TestCase):
         )
         self.assertTrue(
             any("maximum reviewed series" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_codex_0153_4_is_in_the_reviewed_window(self) -> None:
+        report = TeamValidator(
+            self.root,
+            codex_version="codex-cli 0.153.4",
+            codex_version_source="codex_cli",
+        ).validate()
+        self.assertEqual(
+            report["runtime_codex_compatibility"]["status"],
+            "CALLER_ASSERTED",
+        )
+        self.assertEqual(
+            report["runtime_codex_compatibility"]["maximum_reviewed_series"],
+            "0.153.x",
+        )
+
+    def test_codex_0153_rejects_legacy_untrusted_approval_policy(self) -> None:
+        report = TeamValidator(
+            self.root,
+            host_model_evidence=host_model_evidence(),
+            host_permission_evidence=host_permission_evidence(
+                approval_policy="untrusted",
+            ),
+            host_codex_version_evidence=HostCodexVersionEvidence(
+                source="codex_cli",
+                version="codex-cli 0.153.4",
+            ),
+            require_runtime_permissions=True,
+        ).validate()
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["runtime_codex_compatibility"]["status"], "HOST_VERIFIED")
+        self.assertEqual(report["runtime_permissions"]["status"], "MISMATCH")
+        self.assertEqual(
+            report["runtime_permissions"]["accepted_approval_policies"],
+            ["granular", "never", "on-request"],
+        )
+        self.assertTrue(
+            any("untrusted" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_explicit_multi_agent_v2_cap_counts_the_primary_thread(self) -> None:
+        (self.root / ".codex" / "config.toml").write_text(
+            CONFIG_TOML + "\n[features.multi_agent_v2]\nmax_concurrent_threads_per_session = 2\n",
+            encoding="utf-8",
+        )
+        report = TeamValidator(self.root).validate()
+        self.assertEqual(report["configuration_status"], "FAIL")
+        self.assertTrue(
+            any("plus one primary thread" in error for error in report["errors"]),
             report["errors"],
         )
 

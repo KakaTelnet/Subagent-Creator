@@ -1,0 +1,23 @@
+original_blocked_report_sha256=adf39c3fdc400036864df4dfec0adab11480df2de75150cb47562521e41f30f5
+current_source_commit=6a93540c2478f5c53022012ec506e0dd66232057
+current_tracked_diff_sha256=c2692365313da21e6e3c0d18becd32d99e6c9bdf82e821940925266791d84d25
+main_chain_managed_manifest_exists=1
+main_chain_generated_agent_files=0
+target_status:
+?? .agents/
+?? .codex/
+?? AGENTS.md
+?? ai_docs/
+?? data.txt
+?? normalize.js
+?? package.json
+?? sortUnique.js
+?? test.js
+root_status:
+ M skills/subagent-creator/references/agent-team-contract.md
+ M skills/subagent-creator/references/runtime-readiness.md
+ M skills/subagent-creator/references/team-design.md
+ M skills/subagent-creator/scripts/validate_team.py
+ M tooling/tests/test_repository_layout.py
+ M tooling/tests/test_validate_team.py
+?? ai_docs/

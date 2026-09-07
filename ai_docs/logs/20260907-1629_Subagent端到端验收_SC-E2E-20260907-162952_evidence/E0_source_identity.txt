@@ -1,0 +1,10 @@
+source_commit=6a93540c2478f5c53022012ec506e0dd66232057
+tracked_diff_sha256=c2692365313da21e6e3c0d18becd32d99e6c9bdf82e821940925266791d84d25
+git_status:
+ M skills/subagent-creator/references/agent-team-contract.md
+ M skills/subagent-creator/references/runtime-readiness.md
+ M skills/subagent-creator/references/team-design.md
+ M skills/subagent-creator/scripts/validate_team.py
+ M tooling/tests/test_repository_layout.py
+ M tooling/tests/test_validate_team.py
+?? ai_docs/

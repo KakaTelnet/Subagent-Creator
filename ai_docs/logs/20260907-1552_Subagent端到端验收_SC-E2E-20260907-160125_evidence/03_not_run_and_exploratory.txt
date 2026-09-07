@@ -1,0 +1,14 @@
+SC-E2E-01 execution boundary evidence
+run_id=SC-E2E-20260907-160125
+
+Because the observed Codex CLI was 0.153.4, above the reviewed 0.147.x maximum, E1-E7 were not started. No target project, copied Skill, generated team, clean Codex session, Subagent, model call, or business smoke edit was created.
+
+Exploratory command (not an E1-E7 result):
+source ./venv/bin/activate && ... python3 skills/subagent-creator/scripts/validate_team.py --root tooling/tests/fixtures/representative_team
+Output:
+Validation failed. Fix the reported team contract violations.
+BLOCKED_BY_CONFIGURATION: subagent-creator project-level team at /Users/kaka/kDevelop/Skills/subagent-creator/tooling/tests/fixtures/representative_team/.codex/agent-team.toml (1 files, fingerprint e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)
+Configuration: FAIL; local Codex schema: PASS; runtime model availability: UNVERIFIED; runtime permissions: UNVERIFIED; Codex compatibility: UNVERIFIED; persistent orchestration: UNVERIFIED
+ERROR: Agent Team Manifest is missing: /Users/kaka/kDevelop/Skills/subagent-creator/tooling/tests/fixtures/representative_team/.codex/agent-team.toml
+
+Interpretation: this fixture is laid out for repository tests and is not a generated target project; it is not used as evidence for any E1-E7 criterion.

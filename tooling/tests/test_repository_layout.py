@@ -7,6 +7,7 @@ repository before installing optional development tooling.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -258,6 +259,22 @@ class RepositoryLayoutTests(unittest.TestCase):
         ):
             self.assertIn(expected, prompt)
 
+    def test_documented_optional_policy_is_accepted_by_validator_contract(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "validate_team.py").read_text(encoding="utf-8")
+        constants = {
+            node.targets[0].id: ast.literal_eval(node.value)
+            for node in ast.parse(source).body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in {"PROJECT_AGENTS_MANAGED_BLOCK", "OPTIONAL_DISPATCH_POLICY"}
+        }
+        contract = (SKILL_ROOT / "references" / "agent-team-contract.md").read_text(
+            encoding="utf-8"
+        )
+        examples = re.findall(r"```markdown\n(.*?)\n```", contract, re.DOTALL)
+        self.assertIn(constants["PROJECT_AGENTS_MANAGED_BLOCK"], examples)
+        self.assertIn(constants["OPTIONAL_DISPATCH_POLICY"], examples)
+
     def test_forward_cases_cover_new_behavior_without_leaking_oracles(self) -> None:
         fixture = json.loads(
             (
@@ -280,6 +297,8 @@ class RepositoryLayoutTests(unittest.TestCase):
                 "no-team-needed",
                 "prompt-driven-create",
                 "update-idempotent",
+                "global-create-prompt",
+                "requirements-blocked-no-prompt",
             },
         )
         for case in cases:
@@ -323,7 +342,9 @@ class RepositoryLayoutTests(unittest.TestCase):
         self.assertIn("BLOCKED_BY_CODEX_COMPATIBILITY", runtime)
         self.assertIn("runtime_codex_compatibility", runtime)
         self.assertIn("MINIMUM_CODEX_VERSION = (0, 145, 0)", validator)
-        self.assertIn("MAXIMUM_REVIEWED_CODEX_SERIES = (0, 147)", validator)
+        self.assertIn("MAXIMUM_REVIEWED_CODEX_SERIES = (0, 153)", validator)
+        self.assertIn("CODEX_0153_MINIMUM_VERSION = (0, 153, 0)", validator)
+        self.assertIn("CURRENT_APPROVAL_POLICIES", validator)
         self.assertIn('"--codex-version"', validator)
 
     def test_ci_runs_skill_and_plugin_validators(self) -> None:

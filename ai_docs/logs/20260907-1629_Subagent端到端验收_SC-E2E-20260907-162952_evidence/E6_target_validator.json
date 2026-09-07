@@ -1,0 +1,126 @@
+Validation complete. No files were changed.
+{
+  "status": "PASS",
+  "configuration_status": "PASS",
+  "readiness_status": "AGENT_TEAM_CONFIGURATION_READY",
+  "local_codex_schema": {
+    "status": "PASS",
+    "projection": "subagent-creator-managed-fields-v1",
+    "errors": []
+  },
+  "runtime_model_availability": {
+    "status": "UNVERIFIED",
+    "evidence_level": "configuration_only",
+    "evidence_trust": "none",
+    "configuration_usable": true,
+    "declared_sources": [
+      "project_model_allowlist"
+    ],
+    "catalog": {
+      "source": null,
+      "available_models": [],
+      "missing_models": []
+    },
+    "probe": {
+      "source": null,
+      "probed_models": [],
+      "missing_models": []
+    },
+    "required_models": [
+      "economy-model",
+      "strong-model"
+    ],
+    "errors": []
+  },
+  "runtime_permissions": {
+    "status": "UNVERIFIED",
+    "required": false,
+    "evidence_source": null,
+    "evidence_trust": "none",
+    "observed_parent": {
+      "sandbox_mode": null,
+      "approval_policy": null
+    },
+    "accepted_approval_policies": [
+      "granular",
+      "never",
+      "on-request",
+      "untrusted"
+    ],
+    "agents": [
+      {
+        "name": "code_mapper",
+        "configured_sandbox_default": "read-only",
+        "behavioral_boundaries": [
+          "Do not edit files.",
+          "Read repository files only."
+        ],
+        "observed_effective": {
+          "sandbox_mode": null,
+          "approval_policy": null
+        },
+        "comparison_status": "UNVERIFIED"
+      },
+      {
+        "name": "implementation_worker",
+        "configured_sandbox_default": "workspace-write",
+        "behavioral_boundaries": [
+          "Do not change product requirements.",
+          "Write only within the project workspace."
+        ],
+        "observed_effective": {
+          "sandbox_mode": null,
+          "approval_policy": null
+        },
+        "comparison_status": "UNVERIFIED"
+      },
+      {
+        "name": "redundant_reviewer",
+        "configured_sandbox_default": "read-only",
+        "behavioral_boundaries": [
+          "Do not edit files.",
+          "Read repository files only."
+        ],
+        "observed_effective": {
+          "sandbox_mode": null,
+          "approval_policy": null
+        },
+        "comparison_status": "UNVERIFIED"
+      }
+    ],
+    "behavioral_boundary_enforcement": "developer_instructions_only",
+    "errors": []
+  },
+  "runtime_codex_compatibility": {
+    "status": "UNVERIFIED",
+    "required_for_runtime_readiness": false,
+    "evidence_trust": "none",
+    "source": null,
+    "observed": null,
+    "normalized_version": null,
+    "release_channel": null,
+    "minimum_version": "0.145.0",
+    "maximum_reviewed_series": "0.153.x",
+    "errors": []
+  },
+  "persistent_orchestration": {
+    "status": "PASS",
+    "source": "/Users/kaka/kDevelop/Skills/subagent-creator/tmp_py/SC-E2E-20260907-162952/audit-copy/AGENTS.md",
+    "source_of_truth": "/Users/kaka/kDevelop/Skills/subagent-creator/tmp_py/SC-E2E-20260907-162952/audit-copy/.codex/agent-team.toml"
+  },
+  "root": "/Users/kaka/kDevelop/Skills/subagent-creator/tmp_py/SC-E2E-20260907-162952/audit-copy",
+  "scope": {
+    "requested": "project",
+    "display_name": "project-level",
+    "manifest": "project",
+    "authorization_required": false,
+    "authorization_status": "NOT_REQUIRED",
+    "codex_home": "/Users/kaka/.codex",
+    "manifest_path": "/Users/kaka/kDevelop/Skills/subagent-creator/tmp_py/SC-E2E-20260907-162952/audit-copy/.codex/agent-team.toml",
+    "agents_dir": "/Users/kaka/kDevelop/Skills/subagent-creator/tmp_py/SC-E2E-20260907-162952/audit-copy/.codex/agents",
+    "config_path": "/Users/kaka/kDevelop/Skills/subagent-creator/tmp_py/SC-E2E-20260907-162952/audit-copy/.codex/config.toml"
+  },
+  "checked_files": 6,
+  "fingerprint": "cc68dba0b31c00cf46b0e9d4658f12151c1234743f16d3fe05c21caaa2edd2c9",
+  "errors": []
+}

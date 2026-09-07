@@ -1,0 +1,9 @@
+6528535082e9251064266e7ab4b877d50d2e8e4ab31e5943397baea63675496e  ./.agents/skills/subagent-creator/SKILL.md
+9871336c382618c86802c122207bae20cd26033c7f997aa52c1a00ac799721e8  ./.agents/skills/subagent-creator/agents/openai.yaml
+2110dc0db038a951c0908b441a57192330a46c2deee1b017af037e4d87c32b4f  ./.agents/skills/subagent-creator/references/agent-team-contract.md
+6c378333b450e438b8f96fb3227d14138738d9539013de6e99356d5793f2fc7f  ./.agents/skills/subagent-creator/references/runtime-readiness.md
+84a675f0817fa60f65c43391f79c100eff74815fcb8fd3ce57ae8cc70f1c49f6  ./.agents/skills/subagent-creator/references/team-design.md
+624be948042f877c5a379c29aa083938ce7d0818febac8dd02067260b14253da  ./.agents/skills/subagent-creator/scripts/__pycache__/validate_team.cpython-313.pyc
+719a7b0edacdca3449e057bea816de056e8151e04db523d7aa75770dc23014d1  ./.agents/skills/subagent-creator/scripts/validate_team.py
+c2a6e6ab294794e3d58f2be9b7922bc416fb625474608bddb06ae2e6a200440a  ./README.md
+a17fd7acff3b5470aeaf24663b81ee5ff66cd79e4c0b4436c7a5e377cf52c140  ./index.js

@@ -1,0 +1,11 @@
+E1 permission evidence
+
+The first CREATE session returned exit code 0 but stopped at the project instruction gate asking whether the isolated project config could be changed. No files were changed.
+
+The second clean CREATE session was given explicit user authorization for the isolated project team configuration and was run with --sandbox workspace-write. The real Codex session loaded the local copied Skill, read the project facts and sentinel, designed two roles, then reported:
+
+"自动审批已拒绝新增 `.codex/agents/labels_implementer.toml` 和 `.codex/agents/labels_verifier.toml`，原因是目标被判定为项目可写范围之外；当前会话禁止权限升级。"
+
+The attempted safer escalation to --sandbox danger-full-access was rejected by the execution-policy reviewer because it would grant unrestricted filesystem/network authority beyond the isolated target. No escalation was executed and no target file was changed.
+
+Conclusion: E1 is BLOCKED by the host write-permission boundary. This is not converted to PASS or replaced with coordinator-created team files. Dependent E2-E5 remain NOT_RUN.

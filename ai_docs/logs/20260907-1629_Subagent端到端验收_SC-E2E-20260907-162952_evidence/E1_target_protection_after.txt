@@ -1,0 +1,38 @@
+target_main_chain_status:
+?? .agents/
+?? .codex/
+?? AGENTS.md
+?? ai_docs/
+?? data.txt
+?? normalize.js
+?? package.json
+?? sortUnique.js
+?? test.js
+sentinel_sha256=50b38bd9fa85e91d2893ee30b8865e37341dccafaae9a3281ba7812541801d69
+sentinel_contents:
+name = "sentinel_role"
+description = "User-owned sentinel role; preserve without modification."
+developer_instructions = """
+Responsibilities:
+- Remain available as a user-owned sentinel.
+
+Boundaries:
+- Do not modify this file or project files.
+
+Inputs:
+- The current project and task.
+
+Outputs:
+- Report that the sentinel role is preserved.
+
+Escalation:
+- Return all other work to the main Agent.
+"""
+target_main_chain_files:
+a7d2e6fd29df4b8f2cb254b854a59d4beedbde856b6eafe3632379f6eef83854  ./AGENTS.md
+7ff83ee62a1553ba300052a844fac7f4eef6a9188e06f0dac01b38a6f6e9ddda  ./ai_docs/notes/20260907-1630_项目事实.md
+272cd331f3a50cefcfb5d5d56f790879de24df2e792d6f175e23f5de9f0a5625  ./data.txt
+a038d58958913eeb630f2a2f98d48918581f36aca388a82f7d81bb90a4b84973  ./normalize.js
+4af5f28a1c858ad8e7ec4f12a12bd847e0c6e5799b4462666137f73ea00c4273  ./package.json
+8e2e23f0b5c7334e42715aac21627248bc845f32b83b1f73692274c8303adfae  ./sortUnique.js
+4b1b745ed9177bb98b3b8e55a01ad821324cd1e4fdf1825d57317f1535f14f5e  ./test.js

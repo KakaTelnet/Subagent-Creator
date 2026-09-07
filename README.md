@@ -102,7 +102,7 @@ Skill 只管理带有明确所有权标记的 Agent 文件，并使用 `CREATE`�
 - 产品结果、主要范围、非目标和关键约束已经明确；
 - 项目中有可供读取的代码、测试、Product Spec、Change Spec、Technical Spec、Architecture 或等价事实来源；
 - 项目、用户或当前 Codex 运行时能提供明确的模型 allowlist；真实模型调用探测是可选的增强证据；
-- 若希望取得可选的 `AGENT_TEAM_RUNTIME_READY` 或 `AGENT_TEAM_VERIFIED`，需要可信宿主集成直接提供模型目录、逐 Agent 权限、Codex 版本和必要时的真实调用证据，且版本位于本 Skill 已审查的 `0.145.0` 至 `0.147.x` 兼容窗口；普通配置生成不要求这些证据；
+- 若希望取得可选的 `AGENT_TEAM_RUNTIME_READY` 或 `AGENT_TEAM_VERIFIED`，需要可信宿主集成直接提供模型目录、逐 Agent 权限、Codex 版本和必要时的真实调用证据，且版本位于本 Skill 已审查的 `0.145.0` 至 `0.153.x` 兼容窗口；普通配置生成不要求这些证据；
 - 允许 Skill 在目标作用域维护 Codex 配置；全局写入还必须由用户在本次请求中明确声明；
 - 目标项目能提供由 pyenv 管理、Python 3.11 或更高版本的虚拟环境，用于运行只读验证器。
 
@@ -205,6 +205,12 @@ Skill 随后会：
 - 模型配置、目录声明与真实探测的分层状态，以及 Codex 版本兼容性、逐 Agent 运行时权限和配置一致性的验证结果；
 - 实际写入的文件及运行过的验证命令。
 
+成功创建团队、配置验证通过且第二次对账为全 KEEP、零差异后，完成回复还会显示一段可复制的 **“Prompt 建议”**，带入实际团队位置。项目级版本用于完善当前项目的调度规则；全局版本明确说明将影响所有项目。用户发送这段 Prompt 后，Codex 才读取实际配置并更新规则，加入任务匹配、低成本优先、异常升级和执行证据要求。创建过程保留现有基础接线，不自动执行建议或添加可选规则。
+
+项目级补充规则位于同一个受管调度块内，基础规则保持不变，后续 UPDATE 保留已启用的补充部分，避免重复追加。UPDATE、EXPLAIN、AUDIT、失败、阻断和 `NO_AGENT_TEAM_NEEDED` 不自动显示建议。建议不改变角色、模型或权限配置，也不代表已经验证真实调度或成本收益。模板与更新约定见 [Agent Team Contract](skills/subagent-creator/references/agent-team-contract.md#10-post-creation-prompt-suggestion)。
+
+建议旁会明确提醒：**AGENTS.md（或 AGENTS.override.md）变动后，需要重启 Codex 或启动 Codex 的新会话，以加载更新后的规则。** 创建或更新时实际修改了这些文件，也会在完成回复中提示；用户发送建议 Prompt 后，执行者修改规则时会再次提示。Skill 不会自动重启 Codex，也不会声称现有会话已重新加载规则。
+
 ## 何时不应该使用
 
 以下工作不属于本 Skill：
@@ -227,7 +233,7 @@ Skill 包含只读验证器 `skills/subagent-creator/scripts/validate_team.py`�
 
 仓库测试使用隔离 fixture 覆盖 Manifest v1–v3 读取兼容与 v4 持久接线、默认项目级行为、全局显式授权、可选升级、混合权限、模型/权限证据分层、本地严格 Codex 字段、指令契约、符号链接、相对成本层级和失败路径，不要求 CI 真实调用模型。CI 会读取当前官方 Codex JSON Schema 与 Subagents 文档，确认本 Skill 生成字段的存在性、类型和关键约束仍受支持；官方新增字段不会自动放宽本地严格范围。
 
-`tooling/tests/fixtures/forward_cases.json` 另外定义 5 个干净上下文前向测试场景，覆盖 EXPLAIN、AUDIT、提示词驱动 CREATE、`NO_AGENT_TEAM_NEEDED` 和幂等 UPDATE。执行时只把 `agent_input` 交给被测 Agent，`oracle` 由评估者保留；当前 CI 只验证场景 Schema，不把它们冒充为已完成的真实模型前向测试。
+`tooling/tests/fixtures/forward_cases.json` 另外定义 7 个干净上下文前向测试场景，覆盖 EXPLAIN、AUDIT、项目级与全局 CREATE 的建议输出、需求阻断、`NO_AGENT_TEAM_NEEDED` 和保留补充规则的幂等 UPDATE。执行时只把 `agent_input` 交给被测 Agent，`oracle` 由评估者保留；当前 CI 只验证场景 Schema，不把它们冒充为已完成的真实模型前向测试。
 
 ```bash
 source ./venv/bin/activate

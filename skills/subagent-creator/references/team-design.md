@@ -102,6 +102,7 @@ Choose routing using capability, task value, failure cost, invocation frequency,
 - use high-throughput lower-cost models for exploration, repeatable tests, bulk checks, and log summarization;
 - use only reasoning efforts supported by the selected model;
 - default to `read-only`; use `workspace-write` only for roles that must edit; require explicit user authority and an explained risk before `danger-full-access`;
+- on Codex `0.153.4`, treat per-role `sandbox_mode` as a declaration until host evidence confirms it: spawned roles inherit the parent effective permission profile, so do not design mixed-sandbox isolation as an unverified guarantee;
 - bind only existing Skills that match the role. Report missing capabilities as gaps instead of creating another Skill automatically.
 
 An escalation assignment is optional. Add it only when a strictly stronger configuration is available and has a concrete trigger. Without one, the Agent returns the blocked or failed case to the main Agent. A fixed model in a custom Agent file is not assumed to be overridable at spawn time; frequent escalations may justify a separate role, while infrequent ones use a one-off general Agent chosen by the main Agent.

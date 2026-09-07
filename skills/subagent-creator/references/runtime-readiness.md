@@ -75,7 +75,7 @@ Permission statuses are:
 - `HOST_VERIFIED`: complete matching observations came directly from `HostPermissionEvidence`;
 - `MISMATCH`: names, values, or configured/effective sandboxes conflict.
 
-A team may legitimately mix `read-only` and `workspace-write`. Compare each Agent independently rather than forcing the parent's single sandbox onto the whole team. Supported approval policies are `untrusted`, `on-request`, `never`, and host-normalized `granular`.
+A team may legitimately mix `read-only` and `workspace-write`. Compare each Agent independently rather than forcing the parent's single sandbox onto the whole team. For the legacy reviewed Codex window (`0.145.0`–`0.147.x`), accepted approval policies are `untrusted`, `on-request`, `never`, and host-normalized `granular`. Codex `0.153.0+` removes `untrusted`; current-runtime evidence must use only `on-request`, `never`, or host-normalized `granular`. The validator selects the set from the observed version and reports it in `accepted_approval_policies`.
 
 ## 5. Codex compatibility evidence
 
@@ -84,9 +84,21 @@ Local validation uses a narrow offline projection of fields emitted by this Skil
 The reviewed runtime window is:
 
 - minimum stable version: `0.145.0`;
-- maximum reviewed series: `0.147.x`;
+- maximum reviewed series: `0.153.x`;
 - `0.145.0` prereleases remain older than the stable baseline;
 - newer series remain unreviewed until the contract, validator, and tests are updated.
+
+Codex `0.153.4` also exposes a Multi-Agent V2 concurrency setting. The public
+`[agents].max_concurrent_threads_per_session` value remains the spawned-agent
+cap, while an explicit `[features.multi_agent_v2]` cap includes the primary
+thread and must therefore equal the Manifest cap plus one. The validator
+rejects an enabled explicit V2 cap that is absent or inconsistent.
+
+The `0.153.4` role implementation parses `sandbox_mode` in a custom Agent
+layer but applies the parent turn's effective permission profile when spawning
+the child. A role TOML value is therefore only a configured declaration until
+host evidence confirms the effective sandbox. Mixed per-role sandbox claims
+cannot satisfy runtime readiness without matching host evidence.
 
 CLI `--codex-version` plus `--codex-version-source codex_cli|host_runtime` produces at most `CALLER_ASSERTED` for an in-window version. Only `HostCodexVersionEvidence` can produce `HOST_VERIFIED`.
 
